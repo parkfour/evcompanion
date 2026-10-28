@@ -1,0 +1,96 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+    <!-- Needed to scan for BLE OBD adapters: many cheap BLE ELM327 clones don't support
+         classic Bluetooth pairing/bonding at all, so they never show up in the bonded-devices
+         list and can only be found via a live BLE scan. neverForLocation is safe here - we
+         only use scan results to list/connect to a device, never to derive location. -->
+    <uses-permission
+        android:name="android.permission.BLUETOOTH_SCAN"
+        android:usesPermissionFlags="neverForLocation"
+        tools:ignore="UnusedAttribute" />
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <!-- Required by the Car App Library for the NAVIGATION category - Play Console's own
+         upload check rejects the app without these, on top of the category declaration itself.
+         See the EXPERIMENTAL note on the CarAppService below for why this app declares
+         NAVIGATION at all despite doing no real turn-by-turn routing. -->
+    <uses-permission android:name="androidx.car.app.NAVIGATION_TEMPLATES" />
+    <uses-permission android:name="androidx.car.app.ACCESS_SURFACE" />
+
+    <uses-feature android:name="android.hardware.bluetooth" android:required="true" />
+    <uses-feature android:name="android.hardware.bluetooth_le" android:required="false" />
+    <uses-feature android:name="android.software.car.templates_host" android:required="false" />
+
+    <application
+        android:allowBackup="true"
+        android:name=".App"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:theme="@style/Theme.EvCompanion"
+        android:supportsRtl="true">
+
+        <activity
+            android:name=".phone.MainActivity"
+            android:exported="true"
+            android:theme="@style/Theme.EvCompanion">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <service
+            android:name=".core.polling.ObdPollingService"
+            android:exported="false"
+            android:foregroundServiceType="connectedDevice" />
+
+        <!-- Must be exported (and unprotected by a permission) so the Android Auto/Automotive
+             OS host can bind to it - access is controlled by createHostValidator() instead. -->
+        <service
+            android:name=".car.EvCompanionCarAppService"
+            android:exported="true"
+            tools:ignore="ExportedService">
+            <intent-filter>
+                <action android:name="androidx.car.app.CarAppService" />
+                <!-- EXPERIMENTAL: switched from IOT to unlock NavigationTemplate's
+                     SurfaceCallback (custom canvas drawing), which the Car App Library only
+                     grants to the NAVIGATION category - this app doesn't do real turn-by-turn
+                     navigation, so this is a deliberate, personal-use-only stretch of the
+                     category's intended purpose (see project notes for the tradeoffs discussed
+                     before doing this). Do not treat this as a template for what to declare in
+                     a real navigation app. -->
+                <category android:name="androidx.car.app.category.NAVIGATION" />
+            </intent-filter>
+        </service>
+
+        <!-- Lets the "Share debug log" action hand DebugFileLogger's output to the share sheet
+             (email, Drive, Files, etc.) as a content:// URI, without needing USB/adb at all. -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
+
+        <meta-data
+            android:name="androidx.car.app.minCarApiLevel"
+            android:value="1" />
+
+        <meta-data
+            android:name="com.google.android.gms.car.application"
+            android:resource="@xml/automotive_app_desc" />
+
+    </application>
+
+</manifest>

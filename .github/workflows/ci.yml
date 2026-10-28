@@ -1,0 +1,109 @@
+name: CI
+
+# Runs on both Gitea (where this repo is developed) and GitHub (its public
+# mirror). Only Gitea publishes the mirror: that job checks
+# github.server_url, so on GitHub just the checks (and CodeQL) run.
+#
+# No APK release jobs: the app is distributed through a Google Play testing
+# track (Android Auto hides sideloaded NAVIGATION-category apps; see README),
+# and the release signing key is the Play upload key, so it stays off CI.
+
+on:
+  push:
+    branches: ["**"]
+    tags: ["v*"]
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Mirror script tests
+        run: sh tests/publish-mirror.sh
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      # Sets ANDROID_HOME and accepts the SDK licenses; AGP auto-downloads
+      # whatever specific platform/build-tools packages the build needs.
+      # The action's default packages include the legacy "tools", which
+      # Google's SDK repository no longer has, so sdkmanager fails on it.
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
+
+      - name: Unit tests and debug APK
+        run: ./gradlew testDebugUnitTest assembleDebug
+
+  # Copies main, minus the paths in .gitdontforward, to main on the public
+  # GitHub mirror (scripts/publish-mirror.sh), and version tags along with
+  # it. Push main first and let this finish before pushing a tag.
+  # Skipped until the MIRROR_REPO and MIRROR_DEPLOY_KEY secrets are set;
+  # MIRROR_AUTHOR_NAME/EMAIL optionally replace the author on published
+  # commits by the emails in MIRROR_REPLACE_EMAILS (all commits if unset).
+  publish:
+    needs: verify
+    if: (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')) && github.server_url != 'https://github.com'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Publish to the public mirror
+        env:
+          MIRROR_REPO: ${{ secrets.MIRROR_REPO }}
+          MIRROR_DEPLOY_KEY: ${{ secrets.MIRROR_DEPLOY_KEY }}
+          MIRROR_AUTHOR_NAME: ${{ secrets.MIRROR_AUTHOR_NAME }}
+          MIRROR_AUTHOR_EMAIL: ${{ secrets.MIRROR_AUTHOR_EMAIL }}
+          MIRROR_REPLACE_EMAILS: ${{ secrets.MIRROR_REPLACE_EMAILS }}
+        run: |
+          if [ -z "$MIRROR_REPO" ] || [ -z "$MIRROR_DEPLOY_KEY" ]; then
+            echo "Mirror secrets not set; skipping"
+            exit 0
+          fi
+          key=$(mktemp)
+          printf '%s\n' "$MIRROR_DEPLOY_KEY" > "$key"
+          # GitHub's published SSH host key, so the push can't be intercepted.
+          echo "github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl" > "$key.known_hosts"
+          export GIT_SSH_COMMAND="ssh -i $key -o IdentitiesOnly=yes -o UserKnownHostsFile=$key.known_hosts"
+          case "$GITHUB_REF" in
+            refs/tags/*) scripts/publish-mirror.sh --tags-only "$MIRROR_REPO" main ;;
+            *) scripts/publish-mirror.sh "$MIRROR_REPO" main ;;
+          esac
+
+  # On the public GitHub repository only: CodeQL code scanning of each push
+  # to main. Kotlin needs a real build (CodeQL's default setup, build mode
+  # "none", can't read Kotlin), so this replaces default setup, which must
+  # stay off in the repository's settings.
+  codeql:
+    if: github.ref == 'refs/heads/main' && github.server_url == 'https://github.com'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
+
+      - uses: github/codeql-action/init@v4
+        with:
+          languages: java-kotlin
+          build-mode: manual
+
+      - name: Build debug APK
+        run: ./gradlew assembleDebug
+
+      - uses: github/codeql-action/analyze@v4

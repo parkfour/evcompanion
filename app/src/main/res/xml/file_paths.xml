@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Exposes the app's external-files dir (where DebugFileLogger writes) through a content:// URI,
+     so the debug log can be shared via the standard Android share sheet without needing USB/adb. -->
+<paths xmlns:android="http://schemas.android.com/apk/res/android">
+    <external-files-path name="debug_logs" path="." />
+</paths>

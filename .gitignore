@@ -1,0 +1,25 @@
+*.iml
+.gradle/
+/local.properties
+/.idea/
+.DS_Store
+/build/
+/captures/
+.externalNativeBuild/
+.cxx/
+local.properties
+app/build/
+
+# Release signing - never commit these. keystore.properties holds the passwords in plain text
+# and keystore/*.jks is the actual private key; losing both means you can never update the app
+# under this signing identity again (though Play App Signing lets Google reset an upload key).
+keystore.properties
+keystore/
+graphify-out/
+.claude/
+.kotlin/
+
+# Local AI/dev-tooling config
+CLAUDE.md
+.rtk/
+.gitattributes

@@ -1,0 +1,16 @@
+Name,ShortName,ModeAndPID,Equation,Min Value,Max Value,Units,Header
+~Generic EV preset - EV Companion
+~Uses only standard SAE J1979 mode 01 PIDs that virtually any OBD-II-compliant vehicle
+~(including most EVs sold in markets that mandate OBD-II) will answer, with no manufacturer
+~header override needed.
+~
+~This is intentionally thin: there is no SAE-standard way to read SOC, charging power,
+~battery temperatures, or other real EV battery data - that always requires a
+~manufacturer-specific preset (see the bundled IONIQ 5 preset for what that looks like).
+~Use this as a connectivity smoke test, or as a starting point for hand-authoring a preset
+~for another EV.
+~
+000_Vehicle Speed,Speed,010D,c,0,255,km/h,
+000_Ambient Air Temperature,Ambient,0146,c-40,-40,215,C,
+000_Control Module Voltage,ModuleV,0142,((c<8)+d)/1000,0,20,V,
+000_Odometer,Odometer,01A6,((c<24)+(d<16)+(e<8)+f)/10,0,1000000,km,

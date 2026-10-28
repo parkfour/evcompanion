@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Required by Android Auto's local host validator (CAR.VALIDATOR) even for a modern
+  androidx.car.app CarAppService - without this, gearhead rejects the app with
+  "Package DENIED; Uses for TEMPLATE not defined" before ever binding to the service or
+  checking sideload/unknown-sources settings. This is the legacy descriptor Play Console
+  normally injects for published car apps; a sideloaded app has to supply it itself.
+-->
+<automotiveApp>
+    <uses name="template" />
+</automotiveApp>
