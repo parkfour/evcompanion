@@ -227,7 +227,7 @@ fun PresetPickerScreen(viewModel: MainViewModel) {
             item {
                 Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(
-                        "When State of Charge is promoted to hero on Android Auto, EV Companion displays nearby charging stations. When battery SoC falls below the threshold, it automatically filters to high-power DC fast chargers. Tapping any station launches navigation.",
+                        "When State of Charge is promoted to hero on Android Auto, EV Companion displays nearby charging stations. When battery SoC falls below the threshold, it automatically filters to high-power DC fast chargers. Tapping a station opens it in your navigation app (Google Maps or Waze). Charger data comes from OpenStreetMap; your location is sent to its public Overpass API to find nearby stations.",
                         style = androidx.compose.material3.MaterialTheme.typography.bodySmall,
                     )
                     ListItem(
