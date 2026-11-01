@@ -81,6 +81,19 @@ class DashboardConfigRepository(private val context: Context) {
         reload()
     }
 
+    /** Returns the raw JSON text of whichever dashboard configuration is currently active. */
+    suspend fun getActiveConfigJsonText(): String = withContext(Dispatchers.IO) {
+        if (overrideFile.exists()) {
+            overrideFile.readText()
+        } else {
+            try {
+                context.assets.open(DEFAULT_ASSET_PATH).bufferedReader().use { it.readText() }
+            } catch (e: Exception) {
+                "{}"
+            }
+        }
+    }
+
     companion object {
         private const val TAG = "DashboardConfigRepository"
         private const val DEFAULT_ASSET_PATH = "dashboards/default.json"

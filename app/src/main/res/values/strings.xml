@@ -1,4 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">EV Companion</string>
+    <string name="developer_feedback_email">apps@parkfour.com</string>
 </resources>

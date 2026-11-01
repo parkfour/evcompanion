@@ -2,10 +2,17 @@ package com.evcompanion.core.polling
 
 import com.evcompanion.core.bluetooth.LastObdDeviceRepository
 import com.evcompanion.core.debug.DebugFileLogger
+import com.evcompanion.core.efficiency.TripEfficiencyTracker
 import com.evcompanion.core.obd.Elm327Driver
 import com.evcompanion.core.obd.ObdConnectionState
 import com.evcompanion.core.obd.ObdTransport
+import com.evcompanion.core.obd.ObdTransportException
 import com.evcompanion.core.obd.ObdTransportFactory
+import com.evcompanion.core.obd.dtc.DtcCode
+import com.evcompanion.core.obd.dtc.DtcClearResult
+import com.evcompanion.core.obd.dtc.DtcScanResult
+import com.evcompanion.core.obd.dtc.DtcScanState
+import com.evcompanion.core.obd.dtc.DtcScanner
 import com.evcompanion.core.preset.PidCategory
 import com.evcompanion.core.preset.Preset
 import com.evcompanion.core.preset.PresetEvaluator
@@ -80,6 +87,93 @@ class PollingEngine(
     private val slowNameSubscriberCounts = mutableMapOf<String, Int>()
     private val mediumNameSubscriberCounts = mutableMapOf<String, Int>()
 
+    val dtcScanner = DtcScanner()
+    private val efficiencyTracker = TripEfficiencyTracker()
+
+    private val _dtcScanState = MutableStateFlow<DtcScanState>(DtcScanState.Idle)
+    val dtcScanState: StateFlow<DtcScanState> = _dtcScanState.asStateFlow()
+
+    private val diagnosticMutex = Mutex()
+    @Volatile
+    private var isDiagnosticRunning = false
+    private var dtcScanJob: Job? = null
+
+    suspend fun <T> runDiagnosticRoutine(action: suspend (Elm327Driver) -> T): T = diagnosticMutex.withLock {
+        isDiagnosticRunning = true
+        try {
+            val currentDriver = driver ?: throw ObdTransportException("Not connected to vehicle")
+            action(currentDriver)
+        } finally {
+            isDiagnosticRunning = false
+            driver?.resetHeaderTracking()
+        }
+    }
+
+    fun startDtcScan() {
+        val currentJob = dtcScanJob
+        if (currentJob?.isActive == true) return
+        dtcScanJob = scope.launch {
+            val currentDriver = driver
+            if (currentDriver == null) {
+                _dtcScanState.value = DtcScanState.Error("Not connected to vehicle")
+                return@launch
+            }
+            val headers = DtcScanner.discoverTargetHeaders(activePreset)
+            val firstH = headers.firstOrNull()
+            _dtcScanState.value = DtcScanState.Scanning(firstH, 0f, DtcScanner.resolveEcuName(firstH))
+            try {
+                val result = runDiagnosticRoutine { drv ->
+                    dtcScanner.scan(drv, headers) { header, scanned, total, ecuName ->
+                        _dtcScanState.value = DtcScanState.Scanning(header, scanned.toFloat() / total.toFloat(), ecuName)
+                    }
+                }
+                _dtcScanState.value = DtcScanState.Completed(result)
+            } catch (e: CancellationException) {
+                _dtcScanState.value = DtcScanState.Idle
+                throw e
+            } catch (e: Exception) {
+                _dtcScanState.value = DtcScanState.Error(e.message ?: "Scan failed")
+            }
+        }
+    }
+
+    fun clearDtc(isCarParkedOrStopped: Boolean) {
+        val currentJob = dtcScanJob
+        if (currentJob?.isActive == true) return
+        dtcScanJob = scope.launch {
+            val currentDriver = driver
+            if (currentDriver == null) {
+                _dtcScanState.value = DtcScanState.Error("Not connected to vehicle")
+                return@launch
+            }
+            val headers = DtcScanner.discoverTargetHeaders(activePreset)
+            _dtcScanState.value = DtcScanState.Clearing(0f)
+            try {
+                val clearResult = runDiagnosticRoutine { drv ->
+                    dtcScanner.clear(drv, headers, isCarParkedOrStopped) { _, cleared, total ->
+                        _dtcScanState.value = DtcScanState.Clearing(cleared.toFloat() / total.toFloat())
+                    }
+                }
+                if (!clearResult.success) {
+                    _dtcScanState.value = DtcScanState.Error(clearResult.errorMessage ?: "Failed to clear codes")
+                } else {
+                    // Re-scan to verify
+                    val verifyResult = runDiagnosticRoutine { drv ->
+                        dtcScanner.scan(drv, headers) { header, scanned, total, ecuName ->
+                            _dtcScanState.value = DtcScanState.Scanning(header, scanned.toFloat() / total.toFloat(), ecuName)
+                        }
+                    }
+                    _dtcScanState.value = DtcScanState.Completed(verifyResult)
+                }
+            } catch (e: CancellationException) {
+                _dtcScanState.value = DtcScanState.Idle
+                throw e
+            } catch (e: Exception) {
+                _dtcScanState.value = DtcScanState.Error(e.message ?: "Clear failed")
+            }
+        }
+    }
+
     fun connectAsync(deviceAddress: String) {
         val previous = connectJob
         connectJob = scope.launch {
@@ -141,6 +235,10 @@ class PollingEngine(
     suspend fun disconnect() {
         connectJob?.cancelAndJoin()
         connectJob = null
+        dtcScanJob?.cancel()
+        dtcScanJob = null
+        _dtcScanState.value = DtcScanState.Idle
+        efficiencyTracker.reset()
         pollJob?.cancel()
         pollJob = null
         connectionForwardingJob?.cancel()
@@ -302,6 +400,10 @@ class PollingEngine(
     private suspend fun pollLoop() {
         var consecutiveFailedCycles = 0
         while (true) {
+            if (isDiagnosticRunning) {
+                delay(80L)
+                continue
+            }
             val preset = activePreset
             val currentDriver = driver
             val categories: Set<PidCategory>
@@ -351,7 +453,10 @@ class PollingEngine(
             var anySuccess = false
             for (group in sortedDueGroups) {
                 try {
-                    val bytes = currentDriver.requestPid(group.modeAndPid, group.header)
+                    // Same mutex as runDiagnosticRoutine: the isDiagnosticRunning check above is
+                    // only per-cycle, so without this a scan/clear started mid-cycle would
+                    // interleave ELM327 commands (and ATSH header state) with this request.
+                    val bytes = diagnosticMutex.withLock { currentDriver.requestPid(group.modeAndPid, group.header) }
                     val decoded = PresetEvaluator.decodeGroup(group, bytes) { row, e ->
                         DebugFileLogger.w(TAG, "Failed to decode '${row.name}': ${e.message}")
                     }
@@ -383,7 +488,56 @@ class PollingEngine(
                 val merged = (rawSnapshot + calculated).mapNotNull { (name, value) ->
                     val row = rowsByName[name] ?: return@mapNotNull null
                     name to DecodedValue(name, row.shortName.ifBlank { row.name }, row.category, value, row.unit, updatedNow)
-                }.toMap()
+                }.toMap().toMutableMap()
+
+                // Synthesize efficiency metrics
+                val speedEntry = findSnapshotEntry(rawSnapshot, listOf("Real Vehicle Speed", "001_Real Vehicle Speed", "Vehicle Speed", "000_Vehicle Speed"))
+                val speedUnit = speedEntry?.let { rowsByName[it.key]?.unit?.replace("/", "")?.lowercase() }
+                val speedMph = speedEntry?.value?.let { if (speedUnit == "kmh" || speedUnit == "kph") it * 0.621371 else it }
+
+                val powerKw = findSnapshotValue(rawSnapshot, listOf("Battery Power", "000_Battery Power"))
+                val cedKwh = findSnapshotValue(rawSnapshot, listOf("Cumulative Energy Discharged", "000_Cumulative Energy Discharged"))
+                val cecKwh = findSnapshotValue(rawSnapshot, listOf("Cumulative Energy Charged", "000_Cumulative Energy Charged"))
+                val odoMiles = findSnapshotValue(rawSnapshot, listOf("002_Odometer", "Odometer", "001_Odometer", "000_Odometer"))
+
+                val eff = efficiencyTracker.update(speedMph, powerKw, cedKwh, cecKwh, odoMiles)
+
+                if (eff.tripAverageMiPerKwh != null) {
+                    val dv = DecodedValue("Trip Efficiency", "TRIP AVG", PidCategory.CALCULATED, eff.tripAverageMiPerKwh, "mi/kWh", updatedNow)
+                    merged["Trip Efficiency"] = dv
+                    merged["004_CALC Trip Efficiency"] = dv
+                }
+                if (eff.instantMiPerKwh != null) {
+                    val dv = DecodedValue("Instant Efficiency", "INSTANT", PidCategory.CALCULATED, eff.instantMiPerKwh, "mi/kWh", updatedNow)
+                    merged["Instant Efficiency"] = dv
+                    merged["004_CALC Instant Efficiency"] = dv
+                } else if (eff.isRegen) {
+                    val dv = DecodedValue("Instant Efficiency", "INSTANT", PidCategory.CALCULATED, -1.0, "REGEN", updatedNow)
+                    merged["Instant Efficiency"] = dv
+                    merged["004_CALC Instant Efficiency"] = dv
+                }
+                if (eff.tripDistanceMiles != null) {
+                    val dv = DecodedValue("Trip Distance", "TRIP MI", PidCategory.CALCULATED, eff.tripDistanceMiles, "mi", updatedNow)
+                    merged["Trip Distance"] = dv
+                    merged["004_CALC Trip Distance"] = dv
+                }
+                if (eff.tripNetKwh != null) {
+                    val dv = DecodedValue("Trip Energy", "NET kWh", PidCategory.CALCULATED, eff.tripNetKwh, "kWh", updatedNow)
+                    merged["Trip Energy"] = dv
+                    merged["004_CALC Trip Energy"] = dv
+                }
+
+                // Synthesize DTC metrics
+                val dtcState = _dtcScanState.value
+                val dtcCount = if (dtcState is DtcScanState.Completed) dtcState.result.codeCount.toDouble() else 0.0
+                val dtcClean = if (dtcState is DtcScanState.Completed && dtcState.result.isClean) 1.0 else 0.0
+                val dtcCountDv = DecodedValue("DTC Code Count", "CODES", PidCategory.CALCULATED, dtcCount, "", updatedNow)
+                merged["DTC Code Count"] = dtcCountDv
+                merged["004_CALC DTC Code Count"] = dtcCountDv
+
+                val dtcCleanDv = DecodedValue("DTC Scanned Clean", "CLEAN", PidCategory.CALCULATED, dtcClean, "", updatedNow)
+                merged["DTC Scanned Clean"] = dtcCleanDv
+                merged["004_CALC DTC Scanned Clean"] = dtcCleanDv
 
                 _values.value = merged
                 DebugFileLogger.i(TAG, "poll cycle: ${sortedDueGroups.size} groups in ${timeProvider() - cycleStartMillis}ms")
@@ -403,6 +557,13 @@ class PollingEngine(
             delay(sleepMs)
         }
     }
+
+    private fun findSnapshotValue(snapshot: Map<String, Double>, candidates: List<String>): Double? =
+        findSnapshotEntry(snapshot, candidates)?.value
+
+    private fun findSnapshotEntry(snapshot: Map<String, Double>, candidates: List<String>): Map.Entry<String, Double>? =
+        candidates.firstNotNullOfOrNull { name -> snapshot.entries.firstOrNull { it.key == name } }
+            ?: candidates.firstNotNullOfOrNull { name -> snapshot.entries.firstOrNull { it.key.contains(name, ignoreCase = true) } }
 
     companion object {
         private const val TAG = "PollingEngine"

@@ -5,6 +5,9 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.evcompanion.App
 import com.evcompanion.core.bluetooth.BondedDevice
+import com.evcompanion.core.feedback.FeedbackBundle
+import com.evcompanion.core.feedback.FeedbackBundleBuilder
+import com.evcompanion.core.feedback.FeedbackRequest
 import com.evcompanion.core.obd.ObdConnectionState
 import com.evcompanion.core.polling.DecodedValue
 import com.evcompanion.core.polling.ObdPollingService
@@ -72,7 +75,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val dashboardConfigWarnings: StateFlow<List<String>> = container.dashboardConfigRepository.overrideWarnings
 
     val activeThemeId: StateFlow<com.evcompanion.core.theme.DashboardThemeId> = container.dashboardLayoutConfig.themeId
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), com.evcompanion.core.theme.DashboardThemeId.DEFAULT)
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), com.evcompanion.core.theme.DashboardThemeId.EV_DASHBOARD)
 
     fun selectTheme(themeId: com.evcompanion.core.theme.DashboardThemeId) = viewModelScope.launch {
         container.dashboardLayoutConfig.setThemeId(themeId)
@@ -102,7 +105,40 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun setDebugFeaturesEnabled(enabled: Boolean) =
         com.evcompanion.core.debug.DebugFileLogger.setEnabled(getApplication(), enabled)
 
+    val autoScanDtcOnHero: StateFlow<Boolean> = container.dashboardLayoutConfig.autoScanDtcOnHero
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), false)
+
+    fun setAutoScanDtcOnHero(enabled: Boolean) = viewModelScope.launch {
+        container.dashboardLayoutConfig.setAutoScanDtcOnHero(enabled)
+    }
+
+    val socFastChargeThreshold: StateFlow<Int> = container.dashboardLayoutConfig.socFastChargeThresholdPercent
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 30)
+
+    fun setSocFastChargeThreshold(percent: Int) = viewModelScope.launch {
+        container.dashboardLayoutConfig.setSocFastChargeThreshold(percent)
+    }
+
+    val minFastChargePowerKw: StateFlow<Int> = container.dashboardLayoutConfig.minFastChargePowerKw
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 100)
+
+    fun setMinFastChargePowerKw(kw: Int) = viewModelScope.launch {
+        container.dashboardLayoutConfig.setMinFastChargePowerKw(kw)
+    }
+
     fun resetDashboardConfig() = viewModelScope.launch {
         container.dashboardConfigRepository.clearOverride()
+    }
+
+    suspend fun createFeedbackBundle(request: FeedbackRequest): FeedbackBundle {
+        return FeedbackBundleBuilder.createBundle(getApplication(), container, request)
+    }
+
+    fun shareFeedbackBundle(bundle: FeedbackBundle) {
+        FeedbackBundleBuilder.shareBundle(getApplication(), bundle)
+    }
+
+    fun openPlayStoreListing() {
+        FeedbackBundleBuilder.openPlayStoreListing(getApplication())
     }
 }

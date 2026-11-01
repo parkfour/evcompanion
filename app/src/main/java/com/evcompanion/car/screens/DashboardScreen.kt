@@ -1,11 +1,13 @@
 package com.evcompanion.car.screens
 
+import android.content.Intent
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Rect
 import android.graphics.RectF
 import android.graphics.Typeface
+import android.net.Uri
 import android.view.Surface
 import androidx.car.app.AppManager
 import androidx.car.app.CarContext
@@ -34,10 +36,14 @@ import com.evcompanion.core.dashboard.DetailViewDef
 import com.evcompanion.core.dashboard.HeroType
 import com.evcompanion.core.dashboard.TileDef
 import com.evcompanion.core.dashboard.findValue
+import com.evcompanion.core.obd.dtc.DtcScanState
+import com.evcompanion.core.poi.EvCharger
+import com.evcompanion.core.poi.EvChargerRepository
 import com.evcompanion.core.polling.DecodedValue
 import com.evcompanion.core.settings.MotorDriveType
 import com.evcompanion.core.theme.DashboardTheme
 import com.evcompanion.core.theme.DefaultDashboardTheme
+import java.util.Locale
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
@@ -60,12 +66,14 @@ fun promoteAt(order: MutableList<Int>, slot: Int) {
 /**
  * EXPERIMENTAL hand-drawn dashboard, rendered directly onto the Car App Library's drawing
  * surface - which the host only grants to apps declaring the NAVIGATION category (see
- * AndroidManifest.xml). This app does no real turn-by-turn navigation; NAVIGATION was declared
+ * AndroidManifest.xml); NavigationTemplate is rejected by the host under any other category,
+ * including POI. This app does no real turn-by-turn navigation; NAVIGATION was declared
  * specifically to unlock this surface, a deliberate personal-use-only stretch of the category
  * (see project notes on the tradeoffs before doing this). If that ever causes trouble with the
  * Play developer account, this screen and the category declaration are the first things to
  * revert - the ListTemplate-based screens (HomeScreen, LiveDataScreen, etc.) are unaffected and
- * work under any category.
+ * work under any category. When State of Charge is the hero, nearby chargers (OpenStreetMap)
+ * are listed with tap-to-navigate handoff to the driver's navigation app.
  *
  * Modeled on the real IONIQ 5 Companion iOS app's CarPlay screens: one big primary tile sitting
  * on the driver's side of the screen, plus a static 2-row grid of smaller tiles filling the rest -
@@ -119,6 +127,13 @@ class DashboardScreen(carContext: CarContext, private val container: AppContaine
     private var subscribedMediumNames: Set<String> = emptySet()
     private var subscribedSlowNames: Set<String> = emptySet()
     private var latestValues: Map<String, DecodedValue> = emptyMap()
+    private var autoScanDtcOnHero = false
+    private var dtcScanState: DtcScanState = DtcScanState.Idle
+    private var clearDtcArmedUntilMillis = 0L
+    private var socFastChargeThresholdPercent = 30
+    private var minFastChargePowerKw = 100
+    private var nearbyChargers: List<EvCharger> = emptyList()
+    private val socChargerHitBoxes = mutableListOf<Pair<Rect, EvCharger>>()
 
     // Per-page display order of catalog indices into that page's tiles: index 0 is the promoted
     // big value, the rest fill the secondary grid row-major. Keyed by page index (not a fixed enum
@@ -262,9 +277,19 @@ class DashboardScreen(carContext: CarContext, private val container: AppContaine
             )
 
             if (layout.bigRect.contains(x.toInt(), y.toInt())) {
-                val detailId = tiles[order[0]].detail
+                val heroTile = tiles[order[0]]
+                if (heroTile.id == "diagnostics") {
+                    handleDiagnosticsHeroClick()
+                    return
+                }
+                if (isSocHeroTile(heroTile)) {
+                    if (handleSocHeroClick(x.toInt(), y.toInt())) {
+                        return
+                    }
+                }
+                val detailId = heroTile.detail
                 if (detailId == null) {
-                    DebugFileLogger.w(TAG, "onClick -> hero tap but tile ${tiles[order[0]].id} has no detail set")
+                    DebugFileLogger.w(TAG, "onClick -> hero tap but tile ${heroTile.id} has no detail set")
                     return
                 }
                 val detail = cfg.detailViews[detailId]
@@ -298,6 +323,10 @@ class DashboardScreen(carContext: CarContext, private val container: AppContaine
             }
             DebugFileLogger.i(TAG, "onClick -> promoteAt(slot=$slot)")
             promoteAt(order, slot)
+            val newlyPromoted = tiles[order[0]]
+            if (newlyPromoted.id == "diagnostics" && autoScanDtcOnHero && dtcScanState is DtcScanState.Idle) {
+                container.pollingEngine.startDtcScan()
+            }
             redraw()
         }
 
@@ -382,6 +411,40 @@ class DashboardScreen(carContext: CarContext, private val container: AppContaine
         lifecycleScope.launch {
             container.dashboardLayoutConfig.activeTheme.collect { theme ->
                 activeTheme = theme
+                redraw()
+            }
+        }
+
+        lifecycleScope.launch {
+            container.dashboardLayoutConfig.autoScanDtcOnHero.collect {
+                autoScanDtcOnHero = it
+            }
+        }
+
+        lifecycleScope.launch {
+            container.pollingEngine.dtcScanState.collect {
+                dtcScanState = it
+                redraw()
+            }
+        }
+
+        lifecycleScope.launch {
+            container.dashboardLayoutConfig.socFastChargeThresholdPercent.collect {
+                socFastChargeThresholdPercent = it
+                redraw()
+            }
+        }
+
+        lifecycleScope.launch {
+            container.dashboardLayoutConfig.minFastChargePowerKw.collect {
+                minFastChargePowerKw = it
+                redraw()
+            }
+        }
+
+        lifecycleScope.launch {
+            container.evChargerRepository.nearbyChargers.collect {
+                nearbyChargers = it
                 redraw()
             }
         }
@@ -520,7 +583,19 @@ class DashboardScreen(carContext: CarContext, private val container: AppContaine
         page = (page + 1) % pageCount
         updateSubscriptionsForPage()
         showTitle(4000L)
+        checkAutoScanDiagnostics()
         redraw()
+    }
+
+    private fun checkAutoScanDiagnostics() {
+        val cfg = config ?: return
+        val tiles = tilesForPage(cfg, page)
+        if (tiles.isEmpty()) return
+        val order = currentOrder(tiles)
+        val heroTile = tiles[order[0]]
+        if (heroTile.id == "diagnostics" && autoScanDtcOnHero && dtcScanState is DtcScanState.Idle) {
+            container.pollingEngine.startDtcScan()
+        }
     }
 
     /**
@@ -873,6 +948,8 @@ class DashboardScreen(carContext: CarContext, private val container: AppContaine
         val cardColor = tile.backgroundColorRules?.resolve(null, latestValues) ?: activeTheme.defaultCardColor
         GaugeDrawing.drawCard(canvas, inner, cardColor, theme = activeTheme)
         when {
+            tile.id == "diagnostics" -> drawDiagnosticsHero(canvas, inner, tile)
+            isSocHeroTile(tile) -> drawSocChargersHero(canvas, inner, tile)
             tile.hero.type == HeroType.GRAPH -> drawGraphHero(canvas, inner, tile)
             tile.hero.type == HeroType.DIAL && tile.values.size > 1 -> {
                 // Motor RPM shows the front motor (index 0) by default - once this vehicle is
@@ -909,9 +986,10 @@ class DashboardScreen(carContext: CarContext, private val container: AppContaine
         val gauge = tile.gaugeRange
         val fraction = gauge?.let { r -> value?.value?.let { v -> ((v - r.start) / (r.endInclusive - r.start)).coerceIn(0.0, 1.0) } }
         val radius = minOf(inner.width(), inner.height()) * 0.42f
+        val valueText = formatGaugeValue(value, tile.showUnits, decimals(value))
         GaugeDrawing.drawBigGauge(
             canvas, inner.exactCenterX(), inner.exactCenterY(), radius, fraction,
-            valueText = value?.value?.let { "${it.toInt()}${if (tile.showUnits) value.unit else ""}" } ?: "--",
+            valueText = valueText,
             label = tile.label,
             ringColor = { frac -> tile.gaugeColorRules?.resolve(value?.value, latestValues) ?: activeTheme.resolveGaugeColor(frac) },
             theme = activeTheme,
@@ -940,6 +1018,10 @@ class DashboardScreen(carContext: CarContext, private val container: AppContaine
      * get a heading plus a small grid.
      */
     private fun drawTileContent(canvas: Canvas, rect: Rect, tile: TileDef, big: Boolean) {
+        if (tile.id == "diagnostics") {
+            drawDiagnosticsSecondary(canvas, rect, tile)
+            return
+        }
         if (tile.id == "lights") {
             drawLightsIndicator(canvas, rect, tile)
             return
@@ -965,9 +1047,10 @@ class DashboardScreen(carContext: CarContext, private val container: AppContaine
             if (gauge != null) {
                 val fraction = value?.value?.let { v -> ((v - gauge.start) / (gauge.endInclusive - gauge.start)).coerceIn(0.0, 1.0) }
                 val radius = minOf(rect.width(), rect.height()) * (if (big) 0.42f else 0.36f)
+                val valueText = formatGaugeValue(value, tile.showUnits, decimals(value))
                 GaugeDrawing.drawBigGauge(
                     canvas, rect.exactCenterX(), rect.exactCenterY(), radius, fraction,
-                    valueText = value?.value?.let { "${it.toInt()}${if (tile.showUnits) value.unit else ""}" } ?: "--",
+                    valueText = valueText,
                     label = tile.label,
                     ringColor = { frac -> tile.gaugeColorRules?.resolve(value?.value, latestValues) ?: activeTheme.resolveGaugeColor(frac) },
                     theme = activeTheme,
@@ -1097,6 +1180,676 @@ class DashboardScreen(carContext: CarContext, private val container: AppContaine
         draw(RectF(rect.left + lightW + pairGap, rect.top.toFloat(), rect.right.toFloat(), rect.bottom.toFloat()))
     }
 
+    private fun handleDiagnosticsHeroClick() {
+        when (val state = dtcScanState) {
+            is DtcScanState.Idle -> {
+                DebugFileLogger.i(TAG, "Diagnostics hero clicked -> startDtcScan()")
+                container.pollingEngine.startDtcScan()
+            }
+            is DtcScanState.Completed -> {
+                if (state.result.codes.isNotEmpty()) {
+                    val canClear = isSafeToClearDtcs()
+                    val now = System.currentTimeMillis()
+                    DebugFileLogger.i(TAG, "Diagnostics clear clicked: canClear=$canClear armed=${now < clearDtcArmedUntilMillis}")
+                    when {
+                        !canClear -> return
+                        // Clearing wipes every ECU's codes and freeze frames - one accidental tap
+                        // on a car touchscreen must not do it, so the first tap only arms it.
+                        now >= clearDtcArmedUntilMillis -> {
+                            clearDtcArmedUntilMillis = now + CLEAR_DTC_CONFIRM_WINDOW_MS
+                            redraw()
+                        }
+                        else -> {
+                            clearDtcArmedUntilMillis = 0L
+                            container.pollingEngine.clearDtc(isCarParkedOrStopped = true)
+                        }
+                    }
+                } else {
+                    DebugFileLogger.i(TAG, "Diagnostics clean hero clicked -> re-scan")
+                    container.pollingEngine.startDtcScan()
+                }
+            }
+            is DtcScanState.Error -> {
+                DebugFileLogger.i(TAG, "Diagnostics error clicked -> retry scan")
+                container.pollingEngine.startDtcScan()
+            }
+            is DtcScanState.Scanning, is DtcScanState.Clearing -> {
+                // In progress
+            }
+        }
+    }
+
+    /**
+     * Fail-closed: clearing needs a known speed at/near zero, and Park when the preset has a gear
+     * PID. The diagnostics tile subscribes both via extraNeedles so they're live on its page.
+     */
+    private fun isSafeToClearDtcs(): Boolean {
+        val speed = findValue(latestValues, SPEED_PID_NAMES)?.value ?: return false
+        val gearP = findValue(latestValues, GEAR_P_PID_NAMES)?.value
+        return speed <= 1.0 && (gearP == null || gearP > 0.5)
+    }
+
+    private fun formatGaugeValue(value: DecodedValue?, showUnits: Boolean, decimals: Int): String {
+        if (value?.value == null) return "--"
+        if (value.unit.equals("REGEN", ignoreCase = true)) return "REGEN"
+        val num = if (decimals == 0) "${value.value.toInt()}" else String.format(Locale.US, "%.${decimals}f", value.value)
+        return if (showUnits && value.unit.isNotBlank()) "$num ${value.unit}" else num
+    }
+
+    private fun isSocHeroTile(tile: TileDef): Boolean {
+        if (tile.id == "state_of_charge" || tile.id == "soc") return true
+        if (tile.id.startsWith("state_of_charge") && tile.id != "state_of_charge_charging") return true
+        return tile.values.any { v ->
+            v.pidNames.any { it.contains("State of Charge", ignoreCase = true) || it.equals("SOC", ignoreCase = true) } &&
+                tile.id != "state_of_charge_charging"
+        }
+    }
+
+    private fun handleSocHeroClick(x: Int, y: Int): Boolean {
+        val hit = synchronized(socChargerHitBoxes) {
+            socChargerHitBoxes.firstOrNull { it.first.contains(x, y) }
+        } ?: return false
+
+        val charger = hit.second
+        DebugFileLogger.i(TAG, "handleSocHeroClick -> launching navigation for ${charger.name} at (${charger.latitude}, ${charger.longitude})")
+        val geoUri = Uri.parse("geo:${charger.latitude},${charger.longitude}?q=${Uri.encode("${charger.name}, ${charger.address}")}")
+        val navIntent = Intent(CarContext.ACTION_NAVIGATE, geoUri)
+        try {
+            carContext.startCarApp(navIntent)
+        } catch (e: Exception) {
+            DebugFileLogger.e(TAG, "handleSocHeroClick failed to start navigation: ${e.message}")
+        }
+        return true
+    }
+
+    private fun drawSocChargersHero(canvas: Canvas, inner: Rect, tile: TileDef) {
+        synchronized(socChargerHitBoxes) {
+            socChargerHitBoxes.clear()
+        }
+
+        val totalH = inner.height().toFloat()
+        val totalW = inner.width().toFloat()
+
+        // Upper section: SoC Dial Gauge (~36% of card height)
+        val dialH = (totalH * 0.36f).toInt()
+        val dialRect = Rect(inner.left, inner.top, inner.right, inner.top + dialH)
+
+        val value = tile.values.firstOrNull()?.resolve(latestValues)
+        val currentSoc = value?.value
+        val gauge = tile.gaugeRange ?: (0.0..100.0)
+        val fraction = currentSoc?.let { v -> ((v - gauge.start) / (gauge.endInclusive - gauge.start)).coerceIn(0.0, 1.0) }
+        val radius = minOf(dialRect.width(), dialRect.height()) * 0.38f
+        val valueText = formatGaugeValue(value, tile.showUnits, 0)
+        GaugeDrawing.drawBigGauge(
+            canvas, dialRect.exactCenterX(), dialRect.exactCenterY(), radius, fraction,
+            valueText = valueText,
+            label = tile.label,
+            ringColor = { frac -> tile.gaugeColorRules?.resolve(currentSoc, latestValues) ?: activeTheme.resolveGaugeColor(frac) },
+            theme = activeTheme,
+        )
+
+        // Divider line
+        val dividerY = inner.top + dialH + 2f
+        val dividerPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = activeTheme.cardBorderColor ?: Color.argb(40, 255, 255, 255)
+            strokeWidth = 2f
+        }
+        canvas.drawLine(inner.left + totalW * 0.05f, dividerY, inner.right - totalW * 0.05f, dividerY, dividerPaint)
+
+        // Lower section: Nearby EV Chargers List
+        val filterResult = EvChargerRepository.filterChargers(
+            chargers = nearbyChargers,
+            currentSocPercent = currentSoc,
+            socThresholdPercent = socFastChargeThresholdPercent,
+            minPowerKw = minFastChargePowerKw,
+            limit = 3
+        )
+
+        val contentTop = dividerY + 8f
+        val headerH = (totalH * 0.07f).coerceIn(24f, 34f)
+
+        // Header Title
+        val headerTitlePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = if (filterResult.isSmartFilterActive) Color.rgb(255, 179, 0) else activeTheme.headingColor
+            textSize = (headerH * 0.55f).coerceIn(12f, 18f)
+            typeface = Typeface.DEFAULT_BOLD
+            textAlign = Paint.Align.LEFT
+        }
+
+        val headerLeft = inner.left + totalW * 0.04f
+        val headerY = contentTop + headerH * 0.65f
+        val boltPrefix = if (filterResult.isSmartFilterActive) "⚡ " else "⚡ "
+        canvas.drawText("$boltPrefix${filterResult.title}", headerLeft, headerY, headerTitlePaint)
+
+        if (filterResult.subtitle != null) {
+            val subPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                color = Color.rgb(255, 196, 64)
+                textSize = (headerH * 0.42f).coerceIn(10f, 14f)
+                typeface = Typeface.DEFAULT
+                textAlign = Paint.Align.RIGHT
+            }
+            canvas.drawText(filterResult.subtitle, inner.right - totalW * 0.04f, headerY, subPaint)
+        }
+
+        // Charger items
+        val listTop = contentTop + headerH
+        val availableListH = inner.bottom - listTop - 8f
+        val chargers = filterResult.chargers
+
+        if (chargers.isEmpty()) {
+            val emptyPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                color = activeTheme.textSecondaryColor
+                textSize = (totalH * 0.038f).coerceIn(12f, 18f)
+                typeface = activeTheme.labelTypeface
+                textAlign = Paint.Align.CENTER
+            }
+            val msg = if (filterResult.isSmartFilterActive) {
+                "No DC fast chargers (≥${minFastChargePowerKw} kW) nearby"
+            } else {
+                "Searching for nearby EV chargers..."
+            }
+            canvas.drawText(msg, inner.exactCenterX(), listTop + availableListH * 0.4f, emptyPaint)
+            return
+        }
+
+        val rowCount = chargers.size
+        val rowGap = 6f
+        val rowH = ((availableListH - (rowCount - 1) * rowGap) / rowCount).coerceIn(36f, 62f)
+
+        val cardBgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.argb(45, 255, 255, 255)
+            style = Paint.Style.FILL
+        }
+        val cardBorderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = activeTheme.cardBorderColor ?: Color.argb(25, 255, 255, 255)
+            style = Paint.Style.STROKE
+            strokeWidth = 1.5f
+        }
+        val namePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = activeTheme.textPrimaryColor
+            textSize = (rowH * 0.32f).coerceIn(12f, 18f)
+            typeface = Typeface.DEFAULT_BOLD
+            textAlign = Paint.Align.LEFT
+        }
+        val detailPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = activeTheme.textSecondaryColor
+            textSize = (rowH * 0.25f).coerceIn(10f, 14f)
+            typeface = activeTheme.labelTypeface
+            textAlign = Paint.Align.LEFT
+        }
+        val kwBgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.FILL
+        }
+        val kwTextPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.BLACK
+            textSize = (rowH * 0.26f).coerceIn(10f, 15f)
+            typeface = Typeface.DEFAULT_BOLD
+            textAlign = Paint.Align.CENTER
+        }
+        val navBgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = activeTheme.textAccentColor
+            style = Paint.Style.FILL
+        }
+        val navTextPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.WHITE
+            textSize = (rowH * 0.26f).coerceIn(10f, 15f)
+            typeface = Typeface.DEFAULT_BOLD
+            textAlign = Paint.Align.CENTER
+        }
+
+        chargers.forEachIndexed { index, charger ->
+            val rowTop = listTop + index * (rowH + rowGap)
+            val rowRectF = RectF(
+                inner.left + totalW * 0.03f,
+                rowTop,
+                inner.right - totalW * 0.03f,
+                rowTop + rowH
+            )
+            val rowRect = Rect(rowRectF.left.toInt(), rowRectF.top.toInt(), rowRectF.right.toInt(), rowRectF.bottom.toInt())
+
+            synchronized(socChargerHitBoxes) {
+                socChargerHitBoxes.add(rowRect to charger)
+            }
+
+            canvas.drawRoundRect(rowRectF, 10f, 10f, cardBgPaint)
+            canvas.drawRoundRect(rowRectF, 10f, 10f, cardBorderPaint)
+
+            // Right side buttons: NAV button and kW pill
+            val btnH = rowH * 0.65f
+            val btnTop = rowRectF.centerY() - btnH / 2f
+
+            // NAV ➔ button
+            val navBtnW = (rowRectF.width() * 0.18f).coerceIn(52f, 80f)
+            val navBtnRight = rowRectF.right - 8f
+            val navBtnLeft = navBtnRight - navBtnW
+            val navRectF = RectF(navBtnLeft, btnTop, navBtnRight, btnTop + btnH)
+            canvas.drawRoundRect(navRectF, 8f, 8f, navBgPaint)
+            val navBaseline = navRectF.centerY() - (navTextPaint.descent() + navTextPaint.ascent()) / 2f
+            canvas.drawText("NAV ➔", navRectF.centerX(), navBaseline, navTextPaint)
+
+            // kW Badge pill
+            val kwBtnW = (rowRectF.width() * 0.17f).coerceIn(48f, 75f)
+            val kwBtnRight = navBtnLeft - 6f
+            val kwBtnLeft = kwBtnRight - kwBtnW
+            val kwRectF = RectF(kwBtnLeft, btnTop, kwBtnRight, btnTop + btnH)
+
+            kwBgPaint.color = when {
+                charger.maxPowerKw >= 250 -> Color.rgb(0, 229, 255) // Cyan ultra fast
+                charger.maxPowerKw >= 150 -> Color.rgb(60, 200, 100) // Fast green
+                charger.maxPowerKw >= 100 -> Color.rgb(60, 210, 120) // Green
+                else -> Color.rgb(180, 185, 195) // Standard / Level 2 gray
+            }
+            canvas.drawRoundRect(kwRectF, 8f, 8f, kwBgPaint)
+            val kwBaseline = kwRectF.centerY() - (kwTextPaint.descent() + kwTextPaint.ascent()) / 2f
+            canvas.drawText(if (charger.maxPowerKw > 0) "${charger.maxPowerKw}kW" else "?kW", kwRectF.centerX(), kwBaseline, kwTextPaint)
+
+            // Left side texts
+            val textLeft = rowRectF.left + 10f
+            val maxTextW = kwBtnLeft - textLeft - 6f
+
+            // Station Name
+            val rawName = charger.name
+            val nameText = if (namePaint.measureText(rawName) > maxTextW) {
+                var truncated = rawName
+                while (truncated.isNotEmpty() && namePaint.measureText("$truncated…") > maxTextW) {
+                    truncated = truncated.dropLast(1)
+                }
+                "$truncated…"
+            } else {
+                rawName
+            }
+            val nameY = rowRectF.top + rowH * 0.42f
+            canvas.drawText(nameText, textLeft, nameY, namePaint)
+
+            // Details: distance • address/network • stalls
+            val distText = charger.distanceMiles?.let { String.format(Locale.US, "%.1f mi", it) } ?: ""
+            val rawDetail = listOfNotNull(
+                distText.ifBlank { null },
+                (charger.network ?: charger.address).ifBlank { null },
+                charger.plugCount.takeIf { it > 0 }?.let { "$it stalls" }
+            ).joinToString(" • ")
+
+            val detailText = if (detailPaint.measureText(rawDetail) > maxTextW) {
+                var truncated = rawDetail
+                while (truncated.isNotEmpty() && detailPaint.measureText("$truncated…") > maxTextW) {
+                    truncated = truncated.dropLast(1)
+                }
+                "$truncated…"
+            } else {
+                rawDetail
+            }
+            val detailY = rowRectF.top + rowH * 0.82f
+            canvas.drawText(detailText, textLeft, detailY, detailPaint)
+        }
+    }
+
+    private fun drawDiagnosticsHero(canvas: Canvas, inner: Rect, tile: TileDef) {
+        val headingSize = (inner.height() * 0.08f).coerceIn(16f, 32f)
+        val headingPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = activeTheme.headingColor
+            textAlign = Paint.Align.CENTER
+            textSize = headingSize
+            typeface = activeTheme.labelTypeface
+        }
+        canvas.drawText(tile.label, inner.exactCenterX(), inner.top + headingSize * 1.5f, headingPaint)
+
+        val cx = inner.exactCenterX()
+        val topContent = inner.top + headingSize * 2.2f
+
+        when (val state = dtcScanState) {
+            is DtcScanState.Idle -> drawDiagnosticsIdle(canvas, inner, cx, topContent)
+            is DtcScanState.Scanning -> drawDiagnosticsScanning(canvas, inner, cx, topContent, state)
+            is DtcScanState.Clearing -> drawDiagnosticsClearing(canvas, inner, cx, topContent, state)
+            is DtcScanState.Completed -> drawDiagnosticsCompleted(canvas, inner, cx, topContent, state)
+            is DtcScanState.Error -> drawDiagnosticsError(canvas, inner, cx, topContent, state)
+        }
+    }
+
+    private fun drawDiagnosticsIdle(canvas: Canvas, inner: Rect, cx: Float, topContent: Float) {
+        val titlePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = activeTheme.textPrimaryColor
+            textAlign = Paint.Align.CENTER
+            textSize = (inner.height() * 0.11f).coerceIn(20f, 44f)
+            typeface = activeTheme.valueTypeface ?: Typeface.DEFAULT_BOLD
+        }
+        canvas.drawText("READY TO SCAN", cx, inner.exactCenterY() - inner.height() * 0.08f, titlePaint)
+
+        val subPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = activeTheme.textSecondaryColor
+            textAlign = Paint.Align.CENTER
+            textSize = (inner.height() * 0.055f).coerceIn(12f, 22f)
+            typeface = activeTheme.labelTypeface
+        }
+        canvas.drawText("Queries all vehicle ECUs", cx, inner.exactCenterY() - inner.height() * 0.01f, subPaint)
+
+        val btnW = inner.width() * 0.75f
+        val btnH = (inner.height() * 0.16f).coerceIn(36f, 64f)
+        val btnRect = RectF(
+            cx - btnW / 2f,
+            inner.bottom - btnH - inner.height() * 0.08f,
+            cx + btnW / 2f,
+            inner.bottom - inner.height() * 0.08f,
+        )
+        val btnPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.rgb(0x28, 0x6E, 0xC8)
+            style = Paint.Style.FILL
+        }
+        canvas.drawRoundRect(btnRect, 16f, 16f, btnPaint)
+
+        val btnTextPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.WHITE
+            textAlign = Paint.Align.CENTER
+            textSize = (btnH * 0.44f).coerceIn(14f, 26f)
+            typeface = Typeface.DEFAULT_BOLD
+        }
+        val baseline = btnRect.centerY() - (btnTextPaint.descent() + btnTextPaint.ascent()) / 2f
+        canvas.drawText("TAP TO SCAN", cx, baseline, btnTextPaint)
+    }
+
+    private fun drawDiagnosticsScanning(
+        canvas: Canvas,
+        inner: Rect,
+        cx: Float,
+        topContent: Float,
+        state: DtcScanState.Scanning,
+    ) {
+        val titlePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.rgb(0x40, 0x90, 0xFF)
+            textAlign = Paint.Align.CENTER
+            textSize = (inner.height() * 0.10f).coerceIn(20f, 40f)
+            typeface = activeTheme.valueTypeface ?: Typeface.DEFAULT_BOLD
+        }
+        canvas.drawText("SCANNING ECUs...", cx, inner.exactCenterY() - inner.height() * 0.14f, titlePaint)
+
+        val targetName = state.currentEcuName ?: "ECU ${state.currentHeader ?: ""}"
+        val subPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = activeTheme.textSecondaryColor
+            textAlign = Paint.Align.CENTER
+            textSize = (inner.height() * 0.055f).coerceIn(12f, 22f)
+            typeface = activeTheme.labelTypeface
+        }
+        val safeText = GaugeDrawing.shrinkToFit(subPaint, targetName, inner.width() * 0.9f)
+        subPaint.textSize = safeText
+        canvas.drawText(targetName, cx, inner.exactCenterY() - inner.height() * 0.06f, subPaint)
+
+        val barW = inner.width() * 0.80f
+        val barH = (inner.height() * 0.055f).coerceIn(10f, 24f)
+        val barY = inner.exactCenterY() + inner.height() * 0.02f
+        val trackRect = RectF(cx - barW / 2f, barY, cx + barW / 2f, barY + barH)
+
+        val trackPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.rgb(0x33, 0x33, 0x33)
+            style = Paint.Style.FILL
+        }
+        canvas.drawRoundRect(trackRect, barH / 2f, barH / 2f, trackPaint)
+
+        val progressFill = state.progress.coerceIn(0f, 1f)
+        if (progressFill > 0f) {
+            val fillRect = RectF(trackRect.left, trackRect.top, trackRect.left + barW * progressFill, trackRect.bottom)
+            val fillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                color = Color.rgb(0x40, 0x90, 0xFF)
+                style = Paint.Style.FILL
+            }
+            canvas.drawRoundRect(fillRect, barH / 2f, barH / 2f, fillPaint)
+        }
+
+        val pctPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = activeTheme.textPrimaryColor
+            textAlign = Paint.Align.CENTER
+            textSize = (inner.height() * 0.065f).coerceIn(14f, 26f)
+            typeface = activeTheme.valueTypeface ?: Typeface.DEFAULT_BOLD
+        }
+        canvas.drawText("${(progressFill * 100).toInt()}%", cx, barY + barH + inner.height() * 0.08f, pctPaint)
+    }
+
+    private fun drawDiagnosticsClearing(
+        canvas: Canvas,
+        inner: Rect,
+        cx: Float,
+        topContent: Float,
+        state: DtcScanState.Clearing,
+    ) {
+        val titlePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.rgb(0xFF, 0xA0, 0x00)
+            textAlign = Paint.Align.CENTER
+            textSize = (inner.height() * 0.10f).coerceIn(20f, 40f)
+            typeface = activeTheme.valueTypeface ?: Typeface.DEFAULT_BOLD
+        }
+        canvas.drawText("CLEARING CODES...", cx, inner.exactCenterY() - inner.height() * 0.12f, titlePaint)
+
+        val barW = inner.width() * 0.80f
+        val barH = (inner.height() * 0.055f).coerceIn(10f, 24f)
+        val barY = inner.exactCenterY()
+        val trackRect = RectF(cx - barW / 2f, barY, cx + barW / 2f, barY + barH)
+
+        val trackPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.rgb(0x33, 0x33, 0x33)
+            style = Paint.Style.FILL
+        }
+        canvas.drawRoundRect(trackRect, barH / 2f, barH / 2f, trackPaint)
+
+        val progressFill = state.progress.coerceIn(0f, 1f)
+        if (progressFill > 0f) {
+            val fillRect = RectF(trackRect.left, trackRect.top, trackRect.left + barW * progressFill, trackRect.bottom)
+            val fillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                color = Color.rgb(0xFF, 0xA0, 0x00)
+                style = Paint.Style.FILL
+            }
+            canvas.drawRoundRect(fillRect, barH / 2f, barH / 2f, fillPaint)
+        }
+
+        val notePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = activeTheme.textSecondaryColor
+            textAlign = Paint.Align.CENTER
+            textSize = (inner.height() * 0.05f).coerceIn(12f, 20f)
+            typeface = activeTheme.labelTypeface
+        }
+        canvas.drawText("Vehicle must remain in Park", cx, barY + barH + inner.height() * 0.08f, notePaint)
+    }
+
+    private fun drawDiagnosticsCompleted(
+        canvas: Canvas,
+        inner: Rect,
+        cx: Float,
+        topContent: Float,
+        state: DtcScanState.Completed,
+    ) {
+        if (state.result.isClean) {
+            val countPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                color = Color.rgb(0x3C, 0xC8, 0x64)
+                textAlign = Paint.Align.CENTER
+                textSize = (inner.height() * 0.22f).coerceIn(36f, 96f)
+                typeface = activeTheme.valueTypeface ?: Typeface.DEFAULT_BOLD
+            }
+            canvas.drawText("0 DTCs", cx, inner.exactCenterY() - inner.height() * 0.06f, countPaint)
+
+            val statusPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                color = activeTheme.textPrimaryColor
+                textAlign = Paint.Align.CENTER
+                textSize = (inner.height() * 0.07f).coerceIn(14f, 28f)
+                typeface = Typeface.DEFAULT_BOLD
+            }
+            canvas.drawText("ALL SYSTEMS CLEAN", cx, inner.exactCenterY() + inner.height() * 0.04f, statusPaint)
+
+            val detailPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                color = activeTheme.textSecondaryColor
+                textAlign = Paint.Align.CENTER
+                textSize = (inner.height() * 0.05f).coerceIn(12f, 20f)
+                typeface = activeTheme.labelTypeface
+            }
+            canvas.drawText("${state.result.scannedHeaders.size} ECUs Scanned • Clean", cx, inner.exactCenterY() + inner.height() * 0.11f, detailPaint)
+
+            val btnW = inner.width() * 0.70f
+            val btnH = (inner.height() * 0.14f).coerceIn(32f, 56f)
+            val btnRect = RectF(cx - btnW / 2f, inner.bottom - btnH - inner.height() * 0.06f, cx + btnW / 2f, inner.bottom - inner.height() * 0.06f)
+            val btnPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                color = Color.rgb(0x2E, 0x7D, 0x32)
+                style = Paint.Style.FILL
+            }
+            canvas.drawRoundRect(btnRect, 14f, 14f, btnPaint)
+
+            val btnTextPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                color = Color.WHITE
+                textAlign = Paint.Align.CENTER
+                textSize = (btnH * 0.42f).coerceIn(12f, 22f)
+                typeface = Typeface.DEFAULT_BOLD
+            }
+            val baseline = btnRect.centerY() - (btnTextPaint.descent() + btnTextPaint.ascent()) / 2f
+            canvas.drawText("TAP TO RE-SCAN", cx, baseline, btnTextPaint)
+        } else {
+            val countPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                color = Color.rgb(0xFF, 0x52, 0x52)
+                textAlign = Paint.Align.CENTER
+                textSize = (inner.height() * 0.09f).coerceIn(18f, 36f)
+                typeface = Typeface.DEFAULT_BOLD
+            }
+            val countText = "${state.result.codes.size} DTC FAULT${if (state.result.codes.size > 1) "S" else ""}"
+            canvas.drawText(countText, cx, topContent + inner.height() * 0.04f, countPaint)
+
+            val maxDisplay = 3
+            val displayCodes = state.result.codes.take(maxDisplay)
+            val rowH = (inner.height() * 0.09f).coerceIn(16f, 36f)
+            var rowY = topContent + inner.height() * 0.13f
+
+            val codePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                color = Color.WHITE
+                textAlign = Paint.Align.LEFT
+                textSize = (rowH * 0.65f).coerceIn(12f, 22f)
+                typeface = Typeface.DEFAULT_BOLD
+            }
+            val ecuPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                color = activeTheme.textSecondaryColor
+                textAlign = Paint.Align.LEFT
+                textSize = (rowH * 0.50f).coerceIn(10f, 18f)
+                typeface = activeTheme.labelTypeface
+            }
+
+            val listLeft = inner.left + inner.width() * 0.08f
+            val listRight = inner.right - inner.width() * 0.08f
+            for (code in displayCodes) {
+                canvas.drawText(code.code, listLeft, rowY, codePaint)
+                val codeW = codePaint.measureText(code.code)
+                val ecuLeft = listLeft + codeW + 16f
+                val maxEcuW = (listRight - ecuLeft).coerceAtLeast(20f)
+                val ecuLabel = code.ecuName ?: code.header ?: "ECU"
+                val adjustedSize = GaugeDrawing.shrinkToFit(ecuPaint, ecuLabel, maxEcuW)
+                val prevSize = ecuPaint.textSize
+                ecuPaint.textSize = adjustedSize
+                canvas.drawText(ecuLabel, ecuLeft, rowY, ecuPaint)
+                ecuPaint.textSize = prevSize
+                rowY += rowH
+            }
+
+            if (state.result.codes.size > maxDisplay) {
+                val overflowPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                    color = activeTheme.textSecondaryColor
+                    textAlign = Paint.Align.CENTER
+                    textSize = (rowH * 0.45f).coerceIn(10f, 16f)
+                }
+                canvas.drawText("+ ${state.result.codes.size - maxDisplay} more faults", cx, rowY, overflowPaint)
+            }
+
+            val isMoving = !isSafeToClearDtcs()
+            val isArmed = System.currentTimeMillis() < clearDtcArmedUntilMillis
+
+            val btnW = inner.width() * 0.85f
+            val btnH = (inner.height() * 0.16f).coerceIn(36f, 64f)
+            val btnRect = RectF(cx - btnW / 2f, inner.bottom - btnH - inner.height() * 0.05f, cx + btnW / 2f, inner.bottom - inner.height() * 0.05f)
+
+            val btnPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                color = if (isMoving) Color.rgb(0x44, 0x44, 0x44) else Color.rgb(0xDC, 0x28, 0x28)
+                style = Paint.Style.FILL
+            }
+            canvas.drawRoundRect(btnRect, 16f, 16f, btnPaint)
+
+            val btnTextPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                color = if (isMoving) Color.rgb(0xFF, 0xB3, 0x00) else Color.WHITE
+                textAlign = Paint.Align.CENTER
+                textSize = (btnH * 0.40f).coerceIn(12f, 24f)
+                typeface = Typeface.DEFAULT_BOLD
+            }
+            val btnLabel = when {
+                isMoving -> "PARK CAR TO CLEAR"
+                isArmed -> "TAP AGAIN TO CONFIRM"
+                else -> "TAP TO CLEAR CODES"
+            }
+            val baseline = btnRect.centerY() - (btnTextPaint.descent() + btnTextPaint.ascent()) / 2f
+            canvas.drawText(btnLabel, cx, baseline, btnTextPaint)
+        }
+    }
+
+    private fun drawDiagnosticsError(
+        canvas: Canvas,
+        inner: Rect,
+        cx: Float,
+        topContent: Float,
+        state: DtcScanState.Error,
+    ) {
+        val titlePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.rgb(0xFF, 0x52, 0x52)
+            textAlign = Paint.Align.CENTER
+            textSize = (inner.height() * 0.10f).coerceIn(18f, 36f)
+            typeface = Typeface.DEFAULT_BOLD
+        }
+        canvas.drawText("SCAN FAILED", cx, inner.exactCenterY() - inner.height() * 0.10f, titlePaint)
+
+        val msgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = activeTheme.textSecondaryColor
+            textAlign = Paint.Align.CENTER
+            textSize = (inner.height() * 0.055f).coerceIn(12f, 22f)
+            typeface = activeTheme.labelTypeface
+        }
+        val safeMsg = GaugeDrawing.shrinkToFit(msgPaint, state.message, inner.width() * 0.85f)
+        msgPaint.textSize = safeMsg
+        canvas.drawText(state.message, cx, inner.exactCenterY() - inner.height() * 0.02f, msgPaint)
+
+        val btnW = inner.width() * 0.75f
+        val btnH = (inner.height() * 0.15f).coerceIn(34f, 58f)
+        val btnRect = RectF(cx - btnW / 2f, inner.bottom - btnH - inner.height() * 0.08f, cx + btnW / 2f, inner.bottom - inner.height() * 0.08f)
+        val btnPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.rgb(0x44, 0x44, 0x44)
+            style = Paint.Style.FILL
+        }
+        canvas.drawRoundRect(btnRect, 14f, 14f, btnPaint)
+
+        val btnTextPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.WHITE
+            textAlign = Paint.Align.CENTER
+            textSize = (btnH * 0.42f).coerceIn(12f, 22f)
+            typeface = Typeface.DEFAULT_BOLD
+        }
+        val baseline = btnRect.centerY() - (btnTextPaint.descent() + btnTextPaint.ascent()) / 2f
+        canvas.drawText("TAP TO RETRY", cx, baseline, btnTextPaint)
+    }
+
+    private fun drawDiagnosticsSecondary(canvas: Canvas, rect: Rect, tile: TileDef) {
+        val headingSize = (rect.height() * 0.13f).coerceAtMost(rect.width() * 0.10f)
+        val headingPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = activeTheme.headingColor
+            textAlign = Paint.Align.CENTER
+            textSize = headingSize
+            typeface = activeTheme.labelTypeface
+        }
+        canvas.drawText(tile.label, rect.exactCenterX(), rect.top + headingSize * 1.4f, headingPaint)
+
+        val (readoutText, labelText) = when (val state = dtcScanState) {
+            is DtcScanState.Scanning -> "${(state.progress * 100).toInt()}%" to "SCANNING"
+            is DtcScanState.Clearing -> "${(state.progress * 100).toInt()}%" to "CLEARING"
+            is DtcScanState.Completed -> {
+                if (state.result.isClean) "0" to "NO DTCs"
+                else "${state.result.codes.size}" to "DTC CODES"
+            }
+            is DtcScanState.Error -> "ERR" to "DTC ERROR"
+            is DtcScanState.Idle -> "--" to "TAP FOR HERO"
+        }
+
+        val textSize = (rect.width() * 0.20f).coerceIn(14f, 44f).coerceAtMost(rect.height() * 0.34f)
+        GaugeDrawing.drawReadout(
+            canvas, rect.exactCenterX(), rect.exactCenterY().toFloat() + rect.height() * 0.03f, textSize,
+            labelText, readoutText, maxWidth = rect.width() * 0.9f, theme = activeTheme,
+        )
+    }
+
     private fun decimals(value: DecodedValue?): Int {
         val unit = value?.unit
         return if (unit.isNullOrBlank() || unit == "%") 0 else 1
@@ -1104,5 +1857,8 @@ class DashboardScreen(carContext: CarContext, private val container: AppContaine
 
     companion object {
         private const val TAG = "DashboardScreen"
+        private const val CLEAR_DTC_CONFIRM_WINDOW_MS = 5_000L
+        private val SPEED_PID_NAMES = listOf("Real Vehicle Speed", "001_Real Vehicle Speed", "Vehicle Speed", "000_Vehicle Speed")
+        private val GEAR_P_PID_NAMES = listOf("001_Gear Position P", "Gear Position P", "GearP")
     }
 }

@@ -50,15 +50,7 @@ class Elm327Driver(private val transport: ObdTransport) {
         }
     }
 
-    /**
-     * Sends [modeAndPid] (e.g. "220102" or "0x220102") against the ECU at [header] (e.g. "7E4"),
-     * changing the adapter's target header first only if it differs from the last request's.
-     *
-     * Validates that the response starts with the expected positive response SID (requested SID + 0x40)
-     * and the exact echoed PID/DID, preventing stragglers or misattributed frames from corrupting
-     * formula evaluations. Strips the framing bytes and returns data payload only.
-     */
-    suspend fun requestPid(modeAndPid: String, header: String?): ByteArray {
+    suspend fun setHeader(header: String?) {
         if (header != null && header != currentHeader) {
             val response = transport.sendRaw("ATSH $header")
             if (!response.contains("OK", ignoreCase = true)) {
@@ -73,6 +65,32 @@ class Elm327Driver(private val transport: ObdTransport) {
             }
             currentHeader = header
         }
+    }
+
+    /**
+     * Executes a raw OBD / UDS diagnostic command (e.g. "190209", "03", "14FFFFFF", "04")
+     * against [header] and returns the parsed bytes without enforcing DID echo.
+     */
+    suspend fun executeDiagnosticCommand(command: String, header: String?): ByteArray {
+        setHeader(header)
+        val cmd = command.removePrefix("0x").removePrefix("0X").uppercase()
+        val raw = transport.sendRaw(cmd)
+        if (raw.trim().equals("OK", ignoreCase = true)) {
+            return byteArrayOf()
+        }
+        return ObdResponseParser.parseBytes(raw, expectedCommand = null)
+    }
+
+    /**
+     * Sends [modeAndPid] (e.g. "220102" or "0x220102") against the ECU at [header] (e.g. "7E4"),
+     * changing the adapter's target header first only if it differs from the last request's.
+     *
+     * Validates that the response starts with the expected positive response SID (requested SID + 0x40)
+     * and the exact echoed PID/DID, preventing stragglers or misattributed frames from corrupting
+     * formula evaluations. Strips the framing bytes and returns data payload only.
+     */
+    suspend fun requestPid(modeAndPid: String, header: String?): ByteArray {
+        setHeader(header)
         val command = modeAndPid.removePrefix("0x").removePrefix("0X").uppercase()
         val raw = transport.sendRaw(command)
         val bytes = ObdResponseParser.parseBytes(raw, expectedCommand = command)

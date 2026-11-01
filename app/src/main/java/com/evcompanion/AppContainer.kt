@@ -4,7 +4,9 @@ import android.content.Context
 import com.evcompanion.core.bluetooth.BluetoothDeviceRepository
 import com.evcompanion.core.bluetooth.LastObdDeviceRepository
 import com.evcompanion.core.dashboard.DashboardConfigRepository
+import com.evcompanion.core.location.VehicleLocationProvider
 import com.evcompanion.core.obd.ObdTransportFactory
+import com.evcompanion.core.poi.EvChargerRepository
 import com.evcompanion.core.polling.ObdPollingService
 import com.evcompanion.core.polling.PollingEngine
 import com.evcompanion.core.preset.Preset
@@ -28,6 +30,8 @@ class AppContainer(context: Context) {
     val lastObdDeviceRepository = LastObdDeviceRepository(context)
     val dashboardLayoutConfig = DashboardLayoutConfig(context)
     val dashboardConfigRepository = DashboardConfigRepository(context)
+    val vehicleLocationProvider = VehicleLocationProvider(context)
+    val evChargerRepository = EvChargerRepository(context, vehicleLocationProvider, appScope)
     val pollingEngine = PollingEngine(
         transportFactory = ObdTransportFactory(context),
         scope = appScope,

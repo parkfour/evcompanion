@@ -6,6 +6,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
@@ -21,9 +22,14 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.unit.dp
 import androidx.core.content.FileProvider
 import com.evcompanion.core.debug.DebugFileLogger
@@ -41,8 +47,13 @@ fun PresetPickerScreen(viewModel: MainViewModel) {
     val dashboardWarnings by viewModel.dashboardConfigWarnings.collectAsState()
     val presetImportError by viewModel.presetImportError.collectAsState()
     val debugEnabled by viewModel.debugFeaturesEnabled.collectAsState()
+    val autoScanDtc by viewModel.autoScanDtcOnHero.collectAsState()
+    val socThreshold by viewModel.socFastChargeThreshold.collectAsState()
+    val minPowerKw by viewModel.minFastChargePowerKw.collectAsState()
     val context = LocalContext.current
+    val uriHandler = LocalUriHandler.current
     val scope = rememberCoroutineScope()
+    var showFeedbackDialog by remember { mutableStateOf(false) }
 
     val pickDashboardJson = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         uri ?: return@rememberLauncherForActivityResult
@@ -72,7 +83,18 @@ fun PresetPickerScreen(viewModel: MainViewModel) {
         }
     }
 
-    Scaffold(topBar = { TopAppBar(title = { Text("Vehicle preset") }) }) { padding ->
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text("Vehicle preset") },
+                actions = {
+                    TextButton(onClick = { showFeedbackDialog = true }) {
+                        Text("Feedback")
+                    }
+                }
+            )
+        }
+    ) { padding ->
         LazyColumn(modifier = Modifier.fillMaxSize().padding(padding)) {
             items(presets) { preset ->
                 ListItem(
@@ -95,8 +117,16 @@ fun PresetPickerScreen(viewModel: MainViewModel) {
                 Column(modifier = Modifier.padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     // Torque-format custom-PID CSV - lets someone with a different car bring their
                     // own PIDs. Saved and selected until another preset is chosen.
-                    OutlinedButton(onClick = { pickPidCsv.launch(arrayOf("text/csv", "text/comma-separated-values", "text/plain")) }) {
-                        Text("Import PID file (CSV)")
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        OutlinedButton(onClick = { pickPidCsv.launch(arrayOf("text/csv", "text/comma-separated-values", "text/plain")) }) {
+                            Text("Import PID file (CSV)")
+                        }
+                        TextButton(onClick = { uriHandler.openUri("https://github.com/parkfour/evcompanion/blob/main/PID_CONFIG.md") }) {
+                            Text("(how to)")
+                        }
                     }
                     presetImportError?.let { Text(it, style = androidx.compose.material3.MaterialTheme.typography.bodySmall) }
                 }
@@ -117,8 +147,12 @@ fun PresetPickerScreen(viewModel: MainViewModel) {
                             supportingContent = {
                                 Text(
                                     when (theme.id) {
-                                        com.evcompanion.core.theme.DashboardThemeId.DEFAULT -> "Classic dark card grid with standard circular dials"
-                                        com.evcompanion.core.theme.DashboardThemeId.IONIQ5_COMPANION -> "CarPlay style with luminous cyan cards and swept dials"
+                                        com.evcompanion.core.theme.DashboardThemeId.EV_DASHBOARD ->
+                                            "Luminous CarPlay style with smooth curved graphs, gradient glow, and illuminated dials"
+                                        com.evcompanion.core.theme.DashboardThemeId.IONIQ5_COMPANION ->
+                                            "Minimalist flat slate cards with cyan accents and swept dials"
+                                        com.evcompanion.core.theme.DashboardThemeId.CLASSIC_DARK ->
+                                            "Minimalist flat dark cards with standard circular dials"
                                     }
                                 )
                             },
@@ -148,8 +182,16 @@ fun PresetPickerScreen(viewModel: MainViewModel) {
                             "Using the bundled default dashboard layout."
                         },
                     )
-                    OutlinedButton(onClick = { pickDashboardJson.launch(arrayOf("application/json", "text/plain")) }) {
-                        Text("Import dashboard JSON")
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        OutlinedButton(onClick = { pickDashboardJson.launch(arrayOf("application/json", "text/plain")) }) {
+                            Text("Import dashboard JSON")
+                        }
+                        TextButton(onClick = { uriHandler.openUri("https://github.com/parkfour/evcompanion/blob/main/DASHBOARD_CONFIG.md") }) {
+                            Text("(how to)")
+                        }
                     }
                     if (dashboardOverridden) {
                         OutlinedButton(onClick = { viewModel.resetDashboardConfig() }) {
@@ -158,6 +200,93 @@ fun PresetPickerScreen(viewModel: MainViewModel) {
                     }
                     dashboardWarnings.forEach { warning ->
                         Text("Warning: $warning", style = androidx.compose.material3.MaterialTheme.typography.bodySmall)
+                    }
+                }
+            }
+            item {
+                Text(
+                    "Diagnostics",
+                    style = androidx.compose.material3.MaterialTheme.typography.titleMedium,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                )
+            }
+            item {
+                ListItem(
+                    headlineContent = { Text("Auto-scan DTCs on hero promotion") },
+                    supportingContent = { Text("Automatically scans EV modules when the Diagnostics tile is promoted to hero.") },
+                    trailingContent = { Switch(checked = autoScanDtc, onCheckedChange = viewModel::setAutoScanDtcOnHero) },
+                )
+            }
+            item {
+                Text(
+                    "Charging & Navigation",
+                    style = androidx.compose.material3.MaterialTheme.typography.titleMedium,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                )
+            }
+            item {
+                Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        "When State of Charge is promoted to hero on Android Auto, EV Companion displays nearby charging stations. When battery SoC falls below the threshold, it automatically filters to high-power DC fast chargers. Tapping any station launches navigation.",
+                        style = androidx.compose.material3.MaterialTheme.typography.bodySmall,
+                    )
+                    ListItem(
+                        headlineContent = { Text("Low-SoC filter threshold: $socThreshold%") },
+                        supportingContent = { Text("Filters to fast chargers when battery is below this level") },
+                        trailingContent = {
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                OutlinedButton(
+                                    onClick = { if (socThreshold > 10) viewModel.setSocFastChargeThreshold(socThreshold - 5) },
+                                    enabled = socThreshold > 10
+                                ) { Text("-5%") }
+                                OutlinedButton(
+                                    onClick = { if (socThreshold < 60) viewModel.setSocFastChargeThreshold(socThreshold + 5) },
+                                    enabled = socThreshold < 60
+                                ) { Text("+5%") }
+                            }
+                        }
+                    )
+                    ListItem(
+                        headlineContent = { Text("Minimum fast charger power: $minPowerKw kW") },
+                        supportingContent = { Text("Only chargers offering at least this power are shown during low SoC") },
+                        trailingContent = {
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                OutlinedButton(
+                                    onClick = { if (minPowerKw > 50) viewModel.setMinFastChargePowerKw(minPowerKw - 25) },
+                                    enabled = minPowerKw > 50
+                                ) { Text("-25") }
+                                OutlinedButton(
+                                    onClick = { if (minPowerKw < 350) viewModel.setMinFastChargePowerKw(minPowerKw + 25) },
+                                    enabled = minPowerKw < 350
+                                ) { Text("+25") }
+                            }
+                        }
+                    )
+                }
+            }
+            item {
+                Text(
+                    "Support & Feedback",
+                    style = androidx.compose.material3.MaterialTheme.typography.titleMedium,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                )
+            }
+            item {
+                Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        "Submit feedback, report PID formula issues, or share configuration bundles with developers.",
+                        style = androidx.compose.material3.MaterialTheme.typography.bodySmall,
+                    )
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        OutlinedButton(onClick = { showFeedbackDialog = true }) {
+                            Text("Submit diagnostic bundle")
+                        }
+                        TextButton(onClick = { viewModel.openPlayStoreListing() }) {
+                            Text("Play Store feedback")
+                        }
                     }
                 }
             }
@@ -192,5 +321,12 @@ fun PresetPickerScreen(viewModel: MainViewModel) {
                 }
             }
         }
+    }
+
+    if (showFeedbackDialog) {
+        FeedbackDialog(
+            viewModel = viewModel,
+            onDismiss = { showFeedbackDialog = false }
+        )
     }
 }

@@ -3,4 +3,5 @@
      so the debug log can be shared via the standard Android share sheet without needing USB/adb. -->
 <paths xmlns:android="http://schemas.android.com/apk/res/android">
     <external-files-path name="debug_logs" path="." />
+    <cache-path name="feedback" path="feedback/" />
 </paths>

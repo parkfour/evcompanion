@@ -147,6 +147,15 @@ the custom-drawing approach is replaced with the Car App Library's standard
 templates (which would mean giving up the hand-drawn gauge-cluster UI for
 Android's built-in list/grid/message templates).
 
+**Possible way out (not done yet):** since Car App API level 7, POI-category apps
+can draw on the map surface through `MapWithContentTemplate` (with the
+`androidx.car.app.MAP_TEMPLATES` permission), which would also stop the app
+taking "navigate to..." voice requests away from the real navigation app.
+`DashboardScreen` still returns `NavigationTemplate`, which the host only accepts
+from NAVIGATION apps, so changing the manifest category alone breaks the
+dashboard. The screen has to be ported first, and the port tested on a real
+head unit.
+
 ## Other known limitations
 
 - **PID formulas are reverse-engineered, not vendor-documented.** The IONIQ 5
