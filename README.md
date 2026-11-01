@@ -53,8 +53,8 @@ Phone app:
    must be paired in Android's Bluetooth settings first; BLE adapters are found with
    **Scan for BLE devices**. The app reconnects to the last working adapter on launch.
 3. In the **Preset** tab, choose the vehicle preset and Android Auto theme.
-4. Open EV Companion from the Android Auto launcher in the car (see the NAVIGATION
-   section below for why it must be installed from a Play track to appear there).
+4. Open EV Companion from the Android Auto launcher in the car. In a car it has only
+   been seen to appear when installed from a Play track; see the NAVIGATION section below.
 
 ### Bring your own car
 
@@ -108,6 +108,45 @@ keyPassword=...
 Without that file, release builds fall back to the debug key, which is fine
 locally but can't be uploaded to Play.
 
+Debug builds use the application ID `com.parkfour.evcompanion.debug` and the name
+"EV Companion (Debug)", so they install beside the Play version instead of replacing it
+(the two are signed with different keys, so one can't update the other).
+
+### Sideload APK
+
+`./gradlew :app:assembleSideload` builds a release APK for direct download, installed as its own
+app (`com.parkfour.evcompanion.sideload`, "EV Companion (Sideload)") beside the Play and debug
+builds. It is signed with a dedicated sideload key, never the Play upload key, read from the
+environment: `SIDELOAD_KEYSTORE_FILE`, `SIDELOAD_KEY_ALIAS`, `SIDELOAD_STORE_PASSWORD` and
+`SIDELOAD_KEY_PASSWORD` (without them it falls back to the debug key).
+
+For each version tag (`v*`), CI on the public GitHub mirror builds it and attaches
+`evcompanion-<tag>.apk` to that tag's release, once the repository has the secrets
+`SIDELOAD_KEYSTORE_B64` (the keystore, base64-encoded), `SIDELOAD_KEY_ALIAS`,
+`SIDELOAD_STORE_PASSWORD` and `SIDELOAD_KEY_PASSWORD`. Every release must be signed with the
+same key, or testers can't install an update over their current copy, so back the key up.
+
+In a car, only Play-installed builds have been seen to appear so far (see the NAVIGATION
+section); the sideload APK is certain to work on the phone and in the Desktop Head Unit.
+
+### Testing Android Auto without a car
+
+Google's Desktop Head Unit (DHU, SDK package `extras;google;auto`) shows the Android Auto
+screen on your computer, using the phone's own Android Auto:
+
+1. On the phone, enable Android Auto developer mode (Android Auto settings → tap **Version**
+   about 10 times), turn on **Unknown sources** in its developer settings, then choose
+   **Start head unit server** from its menu. Repeat that last step after every phone reboot.
+2. `adb forward tcp:5277 tcp:5277`, then run `desktop-head-unit` from the SDK's
+   `extras/google/auto` folder. `-c config/default_wide.ini` approximates a wide car screen.
+3. To see live values without a car, use a recorded drive: turn on debugging features and pick
+   **Replay a captured drive** on the Connect tab.
+
+On Linux the DHU needs `libc++.so.1`; if it isn't installed, the Android NDK has one
+(`ndk/<version>/toolchains/llvm/prebuilt/linux-x86_64/lib`), passed via `LD_LIBRARY_PATH`.
+USB mode (`--usb`) can fail at the TLS handshake (it did on a phone with Advanced Protection
+on); the head-unit-server route above works.
+
 ## Why this needs the NAVIGATION category - and why that's a problem
 
 Custom Canvas drawing (`SurfaceCallback`) on an Android Auto screen is a
@@ -128,7 +167,7 @@ it, Google has a track record of suspending apps found doing this after the fact
 There is no supported, store-compliant way to get a free-drawing surface on an
 Android Auto screen without actually being a navigation app.
 
-**And yet it still has to go through Play to work at all.** Separately from the
+**And yet, in a car, it has only worked when installed through Play.** Separately from the
 review-policy problem, we found - through direct testing on both an unofficial
 Android Auto client (`headlessunit`) and a real car head unit over aawireless2+ -
 that Android Auto's own app-launcher filters NAVIGATION-category apps out of the
@@ -141,20 +180,30 @@ don't require the full public review a production listing does, which is the gap
 this project currently lives in: good enough to install and test with trusted
 testers, not something that could ever be published for the general public.
 
+**Update (2026-11-01): sideloaded builds do show up in the Desktop Head Unit.** A sideloaded
+NAVIGATION debug build appeared and ran normally in Google's Desktop Head Unit (see "Testing
+Android Auto without a car"). Android Auto on that phone hadn't been updated since before the
+car test that hid the app, so the likely difference is the head unit itself: the DHU connects
+through Android Auto's developer head-unit server, which appears to be more permissive than a
+real car. Until a sideloaded build has been seen in a real car, treat a Play track as the way
+to get the app into a car, and the DHU as the way to test without one.
+
 **Net effect:** this is, and is expected to remain, a sideloaded-via-a-private-
 Play-track, personal/small-group project - not a public Play Store app - unless
 the custom-drawing approach is replaced with the Car App Library's standard
 templates (which would mean giving up the hand-drawn gauge-cluster UI for
 Android's built-in list/grid/message templates).
 
-**Possible way out (not done yet):** since Car App API level 7, POI-category apps
-can draw on the map surface through `MapWithContentTemplate` (with the
-`androidx.car.app.MAP_TEMPLATES` permission), which would also stop the app
-taking "navigate to..." voice requests away from the real navigation app.
-`DashboardScreen` still returns `NavigationTemplate`, which the host only accepts
-from NAVIGATION apps, so changing the manifest category alone breaks the
-dashboard. The screen has to be ported first, and the port tested on a real
-head unit.
+**The POI alternative, tried and shelved.** Since Car App API level 7, POI-category apps
+can draw on the map surface through `MapWithContentTemplate`, which would also stop the app
+taking "navigate to..." voice requests away from the real navigation app. A port was built and
+tested in the DHU (branch `feature/poi-map-with-content`, not merged). It works, but Android
+Auto always shows its own content panel beside the drawing, which the app can't remove, resize
+or fill with a picture. The dashboard gets only what's left of the screen, there is no
+full-screen view even when parked, and surface taps only arrive once a map controller (with a
+pan button) is added. Declaring both NAVIGATION and POI doesn't help either: Android Auto then
+treats the app as the navigation app (its Google Maps card disappears), which brings back every
+NAVIGATION downside.
 
 ## Other known limitations
 
@@ -177,7 +226,7 @@ head unit.
 
 ## Status
 
-Version 0.12.25. Actively developed for one vehicle and a small group of testers. Not submitted,
+Version 0.12.26. Actively developed for one vehicle and a small group of testers. Not submitted,
 and not intended to be submitted, to the Google Play Store for public
 distribution for the reasons above.
 

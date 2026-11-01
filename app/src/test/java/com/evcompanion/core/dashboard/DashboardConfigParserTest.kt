@@ -200,4 +200,30 @@ class DashboardConfigParserTest {
         assertTrue(result.warnings.any { it.contains("gaugeRange") })
         assertNull(result.config?.pages?.get(0)?.tiles?.get(0)?.gaugeRange)
     }
+
+    @Test
+    fun `default bundled dashboard json parses with 5 pages and zero warnings`() {
+        val file = java.io.File("src/main/assets/dashboards/default.json")
+        val stream = if (file.exists()) file.inputStream() else javaClass.classLoader!!.getResourceAsStream("dashboards/default.json")
+        val text = stream!!.bufferedReader().use { it.readText() }
+        val result = DashboardConfigParser.parse(text)
+        assertTrue("Expected no warnings parsing default.json, got: ${result.warnings}", result.warnings.isEmpty())
+        val config = assertNotNull(result.config).let { result.config!! }
+        assertEquals(5, config.pages.size)
+        assertEquals("Drive", config.pages[0].title)
+        assertEquals(5, config.pages[0].tiles.size)
+        assertEquals("Cabin & Body", config.pages[1].title)
+        assertEquals(5, config.pages[1].tiles.size)
+        assertEquals("Battery Health", config.pages[2].title)
+        assertEquals(5, config.pages[2].tiles.size)
+        assertEquals("Charging", config.pages[3].title)
+        assertEquals(6, config.pages[3].tiles.size)
+        assertEquals("Diagnostics", config.pages[4].title)
+        assertEquals(4, config.pages[4].tiles.size)
+
+        // Verify Requested Charge Power in customPids
+        val reqPower = config.customPids.firstOrNull { it.name == "Requested Charge Power" }
+        assertNotNull("Requested Charge Power customPid must be defined", reqPower)
+        assertNotNull("Requested Charge Power formula must parse to a PidRow", reqPower?.toPidRow())
+    }
 }

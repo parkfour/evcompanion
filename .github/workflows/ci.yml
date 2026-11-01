@@ -4,9 +4,10 @@ name: CI
 # mirror). Only Gitea publishes the mirror: that job checks
 # github.server_url, so on GitHub just the checks (and CodeQL) run.
 #
-# No APK release jobs: the app is distributed through a Google Play testing
-# track (Android Auto hides sideloaded NAVIGATION-category apps; see README),
-# and the release signing key is the Play upload key, so it stays off CI.
+# Play builds (AABs) are still made locally: the release signing key is the
+# Play upload key, so it stays off CI. The sideload-apk job below builds a
+# separate APK, signed with its own sideload key, for direct download. In a
+# car, only Play-installed builds have been seen to appear so far (see README).
 
 on:
   push:
@@ -74,6 +75,54 @@ jobs:
             refs/tags/*) scripts/publish-mirror.sh --tags-only "$MIRROR_REPO" main ;;
             *) scripts/publish-mirror.sh "$MIRROR_REPO" main ;;
           esac
+
+  # On the public GitHub mirror, for version tags: builds the sideload APK
+  # (applicationId com.parkfour.evcompanion.sideload, signed with the sideload
+  # key, never the Play upload key) and attaches it to that tag's release.
+  # Skipped until these repository secrets are set: SIDELOAD_KEYSTORE_B64
+  # (base64 of the .jks), SIDELOAD_KEY_ALIAS, SIDELOAD_STORE_PASSWORD,
+  # SIDELOAD_KEY_PASSWORD. Every release must use the same key, or testers
+  # can't install the update over their current copy.
+  sideload-apk:
+    needs: verify
+    if: startsWith(github.ref, 'refs/tags/v') && github.server_url == 'https://github.com'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
+
+      - name: Build signed sideload APK
+        id: build
+        env:
+          SIDELOAD_KEYSTORE_B64: ${{ secrets.SIDELOAD_KEYSTORE_B64 }}
+          SIDELOAD_KEY_ALIAS: ${{ secrets.SIDELOAD_KEY_ALIAS }}
+          SIDELOAD_STORE_PASSWORD: ${{ secrets.SIDELOAD_STORE_PASSWORD }}
+          SIDELOAD_KEY_PASSWORD: ${{ secrets.SIDELOAD_KEY_PASSWORD }}
+        run: |
+          if [ -z "$SIDELOAD_KEYSTORE_B64" ] || [ -z "$SIDELOAD_STORE_PASSWORD" ]; then
+            echo "Sideload signing secrets not set; skipping"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          export SIDELOAD_KEYSTORE_FILE="$RUNNER_TEMP/sideload.jks"
+          printf '%s' "$SIDELOAD_KEYSTORE_B64" | base64 -d > "$SIDELOAD_KEYSTORE_FILE"
+          ./gradlew assembleSideload
+          cp app/build/outputs/apk/sideload/app-sideload.apk "evcompanion-${GITHUB_REF_NAME}.apk"
+
+      - uses: softprops/action-gh-release@v2
+        if: steps.build.outputs.skip != 'true'
+        with:
+          files: evcompanion-${{ github.ref_name }}.apk
 
   # On the public GitHub repository only: CodeQL code scanning of each push
   # to main. Kotlin needs a real build (CodeQL's default setup, build mode

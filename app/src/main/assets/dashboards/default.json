@@ -1,5 +1,16 @@
 {
-  "customPids": [],
+  "customPids": [
+    {
+      "name": "Requested Charge Power",
+      "shortName": "Req Power",
+      "header": "7E4",
+      "modeAndPid": "0x220101",
+      "formula": "(((m<8)+n)/10 * ((h<8)+i)/10) / 1000",
+      "unit": "kW",
+      "min": 0,
+      "max": 360
+    }
+  ],
   "detailViews": {
     "pack_power_detail": {
       "label": "Pack Power",
@@ -26,10 +37,10 @@
     "charging_hero_overlay": {
       "label": "Charging Overview",
       "panels": [
-        { "type": "graph", "label": "SOC / POWER / CURRENT / MIN TEMP", "windowSeconds": 300, "normalizePerSeries": true, "series": [
+        { "type": "graph", "label": "SOC / ACTUAL / REQ / MIN TEMP", "windowSeconds": 300, "normalizePerSeries": true, "series": [
           { "pidNames": ["State of Charge Display", "SOC"], "label": "SOC", "color": "#3CC864" },
-          { "pidNames": ["Battery Power"], "label": "POWER", "negate": true, "color": "#4696E6" },
-          { "pidNames": ["Requested Charge Current"], "label": "REQ A", "color": "#C864DC" },
+          { "pidNames": ["Battery Power"], "label": "ACTUAL", "negate": true, "color": "#4696E6" },
+          { "pidNames": ["Requested Charge Power", "000_Requested Charge Power"], "label": "REQ kW", "color": "#FFB300" },
           { "pidNames": ["Battery Min Temperature"], "label": "MIN TEMP", "color": "#5AAAFF" }
         ] }
       ]
@@ -37,8 +48,8 @@
   },
   "pages": [
     {
-      "title": "Driving",
-      "label": "Driving",
+      "title": "Drive",
+      "label": "Drive",
       "tiles": [
         {
           "id": "state_of_charge",
@@ -53,107 +64,6 @@
             "default": "#3CC864"
           },
           "hero": { "type": "dial" }
-        },
-        {
-          "id": "tires",
-          "label": "TIRES",
-          "values": [
-            { "pidNames": ["Tire Pressure Front Left"] },
-            { "pidNames": ["Tire Pressure Front Right"] },
-            { "pidNames": ["Tire Pressure Back Left"] },
-            { "pidNames": ["Tire Pressure Back Right"] }
-          ],
-          "showUnits": false,
-          "backgroundColorRules": {
-            "rules": [
-              { "pidNames": ["Tire Pressure Front Left", "Tire Pressure Front Right", "Tire Pressure Back Left", "Tire Pressure Back Right"], "compare": "lt", "threshold": 30, "color": "#965A14" }
-            ],
-            "default": "#195A2D"
-          }
-        },
-        {
-          "id": "pack_v_i_p",
-          "label": "PACK V / I / P",
-          "values": [
-            { "pidNames": ["Battery Power"], "sublabel": "Power" },
-            { "pidNames": ["Battery DC Voltage"], "sublabel": "Voltage" },
-            { "pidNames": ["Battery Current"], "sublabel": "Current" }
-          ],
-          "detail": "pack_power_detail"
-        },
-        {
-          "id": "climate",
-          "label": "CLIMATE",
-          "values": [
-            { "pidNames": ["Outdoor Temperature"], "sublabel": "Outdoor" },
-            { "pidNames": ["Indoor Temperature"], "sublabel": "Indoor" },
-            { "pidNames": ["Indoor Relative Humidity"], "sublabel": "Humidity" }
-          ],
-          "extraNeedles": ["A/C Status", "Heating Status"],
-          "backgroundColorRules": {
-            "rules": [
-              { "pidNames": ["A/C Status"], "compare": "eq", "threshold": 1, "color": "#194682" },
-              { "pidNames": ["Heating Status"], "compare": "eq", "threshold": 1, "color": "#96642D" }
-            ],
-            "default": "#1C1C1C"
-          }
-        },
-        {
-          "id": "pack_temps",
-          "label": "PACK TEMPS",
-          "values": [
-            { "pidNames": ["Battery Min Temperature"], "sublabel": "MIN" },
-            { "pidNames": ["Battery Max Temperature"], "sublabel": "MAX" },
-            { "pidNames": ["Battery Conditioning Active", "Battery Heater Temperature"], "sublabel": "HEATER", "showIfPidName": "Battery Conditioning Active", "showIfEquals": 1 }
-          ],
-          "hero": {
-            "type": "graph",
-            "windowSeconds": 300,
-            "series": [
-              { "pidNames": ["Battery Min Temperature"], "label": "MIN", "color": "#5AAAFF" },
-              { "pidNames": ["Battery Max Temperature"], "label": "MAX", "color": "#FF825A" }
-            ]
-          }
-        },
-        {
-          "id": "battery_12v_driving",
-          "label": "12V BATTERY",
-          "values": [
-            { "pidNames": ["Auxillary Battery Voltage"], "sublabel": "VOLTS" },
-            { "pidNames": ["Auxillary Battery SOC"], "sublabel": "SOC" },
-            { "pidNames": ["Auxillary Battery Current"], "sublabel": "AMPS" }
-          ]
-        },
-        {
-          "id": "cell_voltages_driving",
-          "label": "CELL VOLTAGES",
-          "values": [
-            { "pidNames": ["Minimum Cell Voltage"], "sublabel": "MIN" },
-            { "pidNames": ["Maximum Cell Voltage"], "sublabel": "MAX" },
-            { "pidNames": ["Average Cell Voltage"], "sublabel": "AVG" },
-            { "pidNames": ["Battery Cell Voltage Deviation"], "sublabel": "DIFF" }
-          ],
-          "showUnits": false
-        },
-        {
-          "id": "motor_rpm",
-          "label": "MOTOR RPM",
-          "values": [
-            { "pidNames": ["Drive Motor Speed Front"], "sublabel": "FRONT" },
-            { "pidNames": ["Drive Motor Speed Rear"], "sublabel": "REAR" }
-          ],
-          "gaugeRange": [-10100, 10100],
-          "hero": { "type": "dial" },
-          "detail": "motor_rpm_detail"
-        },
-        {
-          "id": "lights",
-          "label": "LIGHTS",
-          "values": [
-            { "pidNames": ["Headlight Status", "001_Headlight Status", "Exterior Lights Code", "001_Exterior Lights Code"], "sublabel": "HEAD" },
-            { "pidNames": ["High Beam Status", "001_High Beam Status"], "sublabel": "HIGH" },
-            { "pidNames": ["Brake Light Status", "001_Brake Light Status"], "sublabel": "BRAKE" }
-          ]
         },
         {
           "id": "efficiency",
@@ -183,6 +93,27 @@
           "hero": { "type": "dial" }
         },
         {
+          "id": "pack_v_i_p",
+          "label": "PACK V / I / P",
+          "values": [
+            { "pidNames": ["Battery Power"], "sublabel": "Power" },
+            { "pidNames": ["Battery DC Voltage"], "sublabel": "Voltage" },
+            { "pidNames": ["Battery Current"], "sublabel": "Current" }
+          ],
+          "detail": "pack_power_detail"
+        },
+        {
+          "id": "motor_rpm",
+          "label": "MOTOR RPM",
+          "values": [
+            { "pidNames": ["Drive Motor Speed Front"], "sublabel": "FRONT" },
+            { "pidNames": ["Drive Motor Speed Rear"], "sublabel": "REAR" }
+          ],
+          "gaugeRange": [-10100, 10100],
+          "hero": { "type": "dial" },
+          "detail": "motor_rpm_detail"
+        },
+        {
           "id": "accelerator",
           "label": "ACCELERATOR",
           "values": [{ "pidNames": ["Accelerator Pedal Position", "Accel Pedal"] }],
@@ -200,116 +131,104 @@
       ]
     },
     {
-      "title": "Charging",
-      "label": "Charging",
+      "title": "Cabin & Body",
+      "label": "Cabin & Body",
       "tiles": [
         {
-          "id": "state_of_charge_charging",
-          "label": "STATE OF CHARGE",
-          "values": [{ "pidNames": ["State of Charge Display", "SOC"] }],
-          "gaugeRange": [0, 100],
-          "gaugeColorRules": {
-            "rules": [
-              { "compare": "lt", "threshold": 10, "color": "#DC3C3C" },
-              { "compare": "lt", "threshold": 20, "color": "#E6B428" }
-            ],
-            "default": "#3CC864"
-          },
-          "hero": { "type": "dial" },
-          "detail": "charging_hero_overlay"
-        },
-        {
-          "id": "input_power",
-          "label": "INPUT POWER",
-          "values": [{ "pidNames": ["Battery Power"], "negate": true }],
-          "gaugeRange": [0, 250],
-          "gaugeColorRules": {
-            "rules": [
-              { "compare": "gt", "threshold": 180, "color": "#4696E6" },
-              { "compare": "lt", "threshold": 50, "color": "#E6B428" }
-            ],
-            "default": "#3CC864"
-          },
-          "hero": { "type": "dial" },
-          "detail": "charging_hero_overlay"
-        },
-        {
-          "id": "voltage_current",
-          "label": "VOLTAGE / CURRENT",
+          "id": "tires",
+          "label": "TIRES",
           "values": [
-            { "pidNames": ["Battery DC Voltage"], "sublabel": "VOLTS" },
-            { "pidNames": ["Battery Current"], "sublabel": "AMPS", "negate": true }
+            { "pidNames": ["Tire Pressure Front Left"] },
+            { "pidNames": ["Tire Pressure Front Right"] },
+            { "pidNames": ["Tire Pressure Back Left"] },
+            { "pidNames": ["Tire Pressure Back Right"] }
           ],
-          "gaugeRange": [0, 800],
-          "hero": { "type": "dial" },
-          "detail": "charging_vi_detail"
+          "showUnits": false,
+          "backgroundColorRules": {
+            "rules": [
+              { "pidNames": ["Tire Pressure Front Left", "Tire Pressure Front Right", "Tire Pressure Back Left", "Tire Pressure Back Right"], "compare": "lt", "threshold": 30, "color": "#965A14" }
+            ],
+            "default": "#195A2D"
+          }
         },
         {
-          "id": "req_current",
-          "label": "REQ CURRENT",
-          "values": [{ "pidNames": ["Requested Charge Current"] }],
-          "detail": "charging_hero_overlay"
+          "id": "tire_temps",
+          "label": "TIRE TEMPS",
+          "values": [
+            { "pidNames": ["Tire Temperature Front Left", "001_Tire Temperature Front Left"], "sublabel": "FL" },
+            { "pidNames": ["Tire Temperature Front Right", "001_Tire Temperature Front Right"], "sublabel": "FR" },
+            { "pidNames": ["Tire Temperature Back Left", "001_Tire Temperature Back Left"], "sublabel": "BL" },
+            { "pidNames": ["Tire Temperature Back Right", "001_Tire Temperature Back Right"], "sublabel": "BR" }
+          ]
         },
         {
-          "id": "pack_min_temp",
-          "label": "PACK MIN TEMP",
-          "values": [{ "pidNames": ["Battery Min Temperature"] }],
-          "detail": "charging_hero_overlay"
+          "id": "climate",
+          "label": "CLIMATE",
+          "values": [
+            { "pidNames": ["Outdoor Temperature"], "sublabel": "Outdoor" },
+            { "pidNames": ["Indoor Temperature"], "sublabel": "Indoor" },
+            { "pidNames": ["Indoor Relative Humidity"], "sublabel": "Humidity" }
+          ],
+          "extraNeedles": ["A/C Status", "Heating Status"],
+          "backgroundColorRules": {
+            "rules": [
+              { "pidNames": ["A/C Status"], "compare": "eq", "threshold": 1, "color": "#194682" },
+              { "pidNames": ["Heating Status"], "compare": "eq", "threshold": 1, "color": "#96642D" }
+            ],
+            "default": "#1C1C1C"
+          }
         },
         {
-          "id": "pack_temps_charging",
+          "id": "battery_12v_driving",
+          "label": "12V BATTERY",
+          "values": [
+            { "pidNames": ["Auxillary Battery Voltage"], "sublabel": "VOLTS" },
+            { "pidNames": ["Auxillary Battery SOC"], "sublabel": "SOC" },
+            { "pidNames": ["Auxillary Battery Current"], "sublabel": "AMPS" }
+          ]
+        },
+        {
+          "id": "lights",
+          "label": "LIGHTS",
+          "values": [
+            { "pidNames": ["Headlight Status", "001_Headlight Status", "Exterior Lights Code", "001_Exterior Lights Code"], "sublabel": "HEAD" },
+            { "pidNames": ["High Beam Status", "001_High Beam Status"], "sublabel": "HIGH" },
+            { "pidNames": ["Brake Light Status", "001_Brake Light Status"], "sublabel": "BRAKE" }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "Battery Health",
+      "label": "Battery Health",
+      "tiles": [
+        {
+          "id": "pack_temps",
           "label": "PACK TEMPS",
           "values": [
             { "pidNames": ["Battery Min Temperature"], "sublabel": "MIN" },
             { "pidNames": ["Battery Max Temperature"], "sublabel": "MAX" },
-            { "pidNames": ["Average Battery Pack Temperature"], "sublabel": "AVG" }
+            { "pidNames": ["Battery Conditioning Active", "Battery Heater Temperature"], "sublabel": "HEATER", "showIfPidName": "Battery Conditioning Active", "showIfEquals": 1 }
           ],
-          "detail": "charging_hero_overlay"
+          "hero": {
+            "type": "graph",
+            "windowSeconds": 300,
+            "series": [
+              { "pidNames": ["Battery Min Temperature"], "label": "MIN", "color": "#5AAAFF" },
+              { "pidNames": ["Battery Max Temperature"], "label": "MAX", "color": "#FF825A" }
+            ]
+          }
         },
         {
-          "id": "cell_voltages_charging",
+          "id": "cell_voltages_driving",
           "label": "CELL VOLTAGES",
           "values": [
             { "pidNames": ["Minimum Cell Voltage"], "sublabel": "MIN" },
             { "pidNames": ["Maximum Cell Voltage"], "sublabel": "MAX" },
             { "pidNames": ["Average Cell Voltage"], "sublabel": "AVG" },
             { "pidNames": ["Battery Cell Voltage Deviation"], "sublabel": "DIFF" }
-          ]
-        },
-        {
-          "id": "plug_status",
-          "label": "PLUG STATUS",
-          "values": [
-            { "pidNames": ["Normal Charge Port"], "sublabel": "AC" },
-            { "pidNames": ["Rapid Charge Port"], "sublabel": "CCS" },
-            { "pidNames": ["HV_Charging"], "sublabel": "HV" }
-          ]
-        },
-        {
-          "id": "remaining",
-          "label": "REMAINING",
-          "values": [{ "pidNames": ["Battery Remaining Energy"] }]
-        }
-      ]
-    },
-    {
-      "title": "Other",
-      "label": "Other",
-      "tiles": [
-        {
-          "id": "diagnostics",
-          "label": "DIAGNOSTICS",
-          "values": [
-            { "pidNames": ["DTC Code Count", "004_CALC DTC Code Count"], "sublabel": "CODES" }
           ],
-          "extraNeedles": ["Real Vehicle Speed", "Vehicle Speed", "Gear Position P"],
-          "backgroundColorRules": {
-            "rules": [
-              { "pidNames": ["DTC Code Count", "004_CALC DTC Code Count"], "compare": "gt", "threshold": 0, "color": "#DC3C3C" },
-              { "pidNames": ["DTC Scanned Clean", "004_CALC DTC Scanned Clean"], "compare": "eq", "threshold": 1, "color": "#195A2D" }
-            ],
-            "default": "#1C1C1C"
-          }
+          "showUnits": false
         },
         {
           "id": "power_limits",
@@ -339,21 +258,127 @@
             { "pidNames": ["Cumulative Energy Discharged", "000_Cumulative Energy Discharged"], "sublabel": "DISCHARGED" },
             { "pidNames": ["Operating Time", "000_Operating Time"], "sublabel": "HOURS" }
           ]
+        }
+      ]
+    },
+    {
+      "title": "Charging",
+      "label": "Charging",
+      "tiles": [
+        {
+          "id": "state_of_charge_charging",
+          "label": "STATE OF CHARGE",
+          "values": [{ "pidNames": ["State of Charge Display", "SOC"] }],
+          "gaugeRange": [0, 100],
+          "gaugeColorRules": {
+            "rules": [
+              { "compare": "lt", "threshold": 10, "color": "#DC3C3C" },
+              { "compare": "lt", "threshold": 20, "color": "#E6B428" }
+            ],
+            "default": "#3CC864"
+          },
+          "hero": { "type": "dial" },
+          "detail": "charging_hero_overlay"
         },
         {
-          "id": "tire_temps",
-          "label": "TIRE TEMPS",
+          "id": "charging_power",
+          "label": "CHARGING POWER",
           "values": [
-            { "pidNames": ["Tire Temperature Front Left", "001_Tire Temperature Front Left"], "sublabel": "FL" },
-            { "pidNames": ["Tire Temperature Front Right", "001_Tire Temperature Front Right"], "sublabel": "FR" },
-            { "pidNames": ["Tire Temperature Back Left", "001_Tire Temperature Back Left"], "sublabel": "BL" },
-            { "pidNames": ["Tire Temperature Back Right", "001_Tire Temperature Back Right"], "sublabel": "BR" }
+            { "pidNames": ["Battery Power"], "sublabel": "ACTUAL", "negate": true },
+            { "pidNames": ["Requested Charge Power", "000_Requested Charge Power"], "sublabel": "REQUESTED" },
+            { "pidNames": ["Requested Charge Current", "000_Requested Charge Current"], "sublabel": "REQ A" }
+          ],
+          "gaugeRange": [0, 250],
+          "gaugeColorRules": {
+            "rules": [
+              { "compare": "gt", "threshold": 180, "color": "#4696E6" },
+              { "compare": "lt", "threshold": 50, "color": "#E6B428" }
+            ],
+            "default": "#3CC864"
+          },
+          "hero": { "type": "dial" },
+          "detail": "charging_hero_overlay"
+        },
+        {
+          "id": "voltage_current",
+          "label": "VOLTAGE / CURRENT",
+          "values": [
+            { "pidNames": ["Battery DC Voltage"], "sublabel": "VOLTS" },
+            { "pidNames": ["Battery Current"], "sublabel": "AMPS", "negate": true }
+          ],
+          "gaugeRange": [0, 800],
+          "hero": { "type": "dial" },
+          "detail": "charging_vi_detail"
+        },
+        {
+          "id": "pack_temps_charging",
+          "label": "PACK TEMPS",
+          "values": [
+            { "pidNames": ["Battery Min Temperature"], "sublabel": "MIN" },
+            { "pidNames": ["Battery Max Temperature"], "sublabel": "MAX" },
+            { "pidNames": ["Average Battery Pack Temperature"], "sublabel": "AVG" }
+          ],
+          "detail": "charging_hero_overlay"
+        },
+        {
+          "id": "plug_status",
+          "label": "PLUG STATUS",
+          "values": [
+            { "pidNames": ["Normal Charge Port"], "sublabel": "AC" },
+            { "pidNames": ["Rapid Charge Port"], "sublabel": "CCS" },
+            { "pidNames": ["HV_Charging"], "sublabel": "HV" }
           ]
+        },
+        {
+          "id": "remaining",
+          "label": "REMAINING",
+          "values": [{ "pidNames": ["Battery Remaining Energy"] }]
+        }
+      ]
+    },
+    {
+      "title": "Diagnostics",
+      "label": "Diagnostics",
+      "tiles": [
+        {
+          "id": "diagnostics",
+          "label": "DIAGNOSTICS",
+          "values": [
+            { "pidNames": ["DTC Code Count", "004_CALC DTC Code Count"], "sublabel": "CODES" }
+          ],
+          "extraNeedles": ["Real Vehicle Speed", "Vehicle Speed", "Gear Position P"],
+          "backgroundColorRules": {
+            "rules": [
+              { "pidNames": ["DTC Code Count", "004_CALC DTC Code Count"], "compare": "gt", "threshold": 0, "color": "#DC3C3C" },
+              { "pidNames": ["DTC Scanned Clean", "004_CALC DTC Scanned Clean"], "compare": "eq", "threshold": 1, "color": "#195A2D" }
+            ],
+            "default": "#1C1C1C"
+          }
         },
         {
           "id": "odometer",
           "label": "ODOMETER",
           "values": [{ "pidNames": ["002_Odometer", "Odometer", "001_Odometer"] }]
+        },
+        {
+          "id": "battery_health_diag",
+          "label": "BATTERY HEALTH",
+          "values": [
+            { "pidNames": ["State of Health", "000_State of Health"], "sublabel": "SOH" },
+            { "pidNames": ["Maximum Deterioration Cell No", "000_Maximum Deterioration Cell No"], "sublabel": "WORST CELL" },
+            { "pidNames": ["Battery Cell Voltage Deviation", "000_Battery Cell Voltage Deviation"], "sublabel": "DEV" }
+          ],
+          "gaugeRange": [0, 100],
+          "hero": { "type": "dial" }
+        },
+        {
+          "id": "lifetime_totals_diag",
+          "label": "LIFETIME TOTALS",
+          "values": [
+            { "pidNames": ["Cumulative Energy Charged", "000_Cumulative Energy Charged"], "sublabel": "CHARGED" },
+            { "pidNames": ["Cumulative Energy Discharged", "000_Cumulative Energy Discharged"], "sublabel": "DISCHARGED" },
+            { "pidNames": ["Operating Time", "000_Operating Time"], "sublabel": "HOURS" }
+          ]
         }
       ]
     }

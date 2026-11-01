@@ -17,6 +17,11 @@ val keystoreProperties = Properties().apply {
     }
 }
 
+// Sideload APKs (attached to GitHub releases by CI) are signed with their own key, never the
+// Play upload key above. CI decodes it from secrets and passes these variables; without them
+// the sideload build falls back to debug signing so it still builds anywhere.
+val sideloadKeystoreFile: String? = System.getenv("SIDELOAD_KEYSTORE_FILE")
+
 android {
     namespace = "com.evcompanion"
     compileSdk = 36
@@ -25,8 +30,8 @@ android {
         applicationId = "com.parkfour.evcompanion"
         minSdk = 26
         targetSdk = 36
-        versionCode = 45
-        versionName = "0.12.25"
+        versionCode = 47
+        versionName = "0.12.26"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -38,6 +43,14 @@ android {
                 storePassword = keystoreProperties.getProperty("storePassword")
                 keyAlias = keystoreProperties.getProperty("keyAlias")
                 keyPassword = keystoreProperties.getProperty("keyPassword")
+            }
+        }
+        if (sideloadKeystoreFile != null) {
+            create("sideload") {
+                storeFile = file(sideloadKeystoreFile)
+                storePassword = System.getenv("SIDELOAD_STORE_PASSWORD")
+                keyAlias = System.getenv("SIDELOAD_KEY_ALIAS")
+                keyPassword = System.getenv("SIDELOAD_KEY_PASSWORD")
             }
         }
     }
@@ -52,6 +65,20 @@ android {
             }
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }
+        debug {
+            // Installs beside the Play build (different signing key) instead of replacing it.
+            applicationIdSuffix = ".debug"
+            resValue("string", "app_name", "EV Companion (Debug)")
+        }
+        // A release build for direct download: its own application ID so it installs beside
+        // the Play and debug builds (each is signed with a different key).
+        create("sideload") {
+            initWith(getByName("release"))
+            applicationIdSuffix = ".sideload"
+            resValue("string", "app_name", "EV Companion (Sideload)")
+            signingConfig = signingConfigs.getByName(if (sideloadKeystoreFile != null) "sideload" else "debug")
+            matchingFallbacks += "release"
+        }
     }
 
     compileOptions {
@@ -61,6 +88,7 @@ android {
 
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 
     packaging {

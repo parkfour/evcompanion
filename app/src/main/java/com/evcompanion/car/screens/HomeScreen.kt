@@ -10,6 +10,7 @@ import androidx.car.app.model.Row
 import androidx.car.app.model.Template
 import androidx.lifecycle.lifecycleScope
 import com.evcompanion.AppContainer
+import com.evcompanion.BuildConfig
 import com.evcompanion.core.obd.ObdConnectionState
 import com.evcompanion.core.preset.Preset
 import com.evcompanion.core.theme.DashboardTheme
@@ -75,6 +76,13 @@ class HomeScreen(carContext: CarContext, private val container: AppContainer) : 
                 .setOnClickListener {
                     lifecycleScope.launch { container.dashboardLayoutConfig.cycleTheme() }
                 }
+                .build()
+        )
+
+        listBuilder.addItem(
+            Row.Builder()
+                .setTitle("App Version")
+                .addText("v${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})")
                 .build()
         )
 

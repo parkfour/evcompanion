@@ -104,4 +104,14 @@ class FormulaEvaluatorTest {
         assertEquals(true, Formula.parse("{j:7}").usesRawBytes)
         assertEquals(false, Formula.parse("val{x}/2").usesRawBytes)
     }
+
+    @Test
+    fun `requested charge power - pack volts times requested amps`() {
+        // 000_Requested Charge Power,0x220101,(((m<8)+n)/10*((h<8)+i)/10)/1000
+        // volts = bytes m,n (offsets 12,13 - same as 000_Battery DC Voltage), amps = h,i (7,8)
+        val formula = Formula.parse("(((m<8)+n)/10*((h<8)+i)/10)/1000")
+        // 0x1D1A = 7450 -> 745.0 V; 0x05DC = 1500 -> 150.0 A; 745 * 150 / 1000 = 111.75 kW
+        val b = bytes(16, 12 to 0x1D, 13 to 0x1A, 7 to 0x05, 8 to 0xDC, 4 to 140)
+        assertEquals(111.75, formula.evaluate(bytes = b), 1e-9)
+    }
 }

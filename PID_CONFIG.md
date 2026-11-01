@@ -45,20 +45,25 @@ Name,ShortName,ModeAndPID,Equation,Min Value,Max Value,Units,Header
 EV Companion supports standard Torque equation syntax:
 
 ### Raw Byte Access
-* **`a`, `b`, `c`, ... `z`, `aa`, `ab`, ...**: 0-indexed byte offsets in the raw diagnostic response payload.
-* **`{byte:bit}`**: Extracts a specific bit (0–7) from a byte offset. For example:
-  * `{0:0}` extracts bit 0 of byte 0.
-  * `{F:1}` extracts bit 1 of byte 15 (hex `F`).
+* **`a`, `b`, `c`, ... `z`, `aa`, `ab`, ...**: bytes of the response payload by position: `a` is
+  offset 0, `z` is 25, `aa` is 26, and so on. Letters are case-insensitive (`K` is the same as `k`).
+* **`{byte:bit}`**: one bit (0–7) of a byte, where the byte is written as a letter like above:
+  * `{j:7}` is bit 7 of byte `j` (offset 9).
+  * `{F:1}` is bit 1 of byte `f` (offset 5). `F` is a letter here, not hex 15.
 
 ### Operators
 * Basic arithmetic: `+`, `-`, `*`, `/`
 * Parentheses for precedence: `(a * 256 + b) / 10`
-* Bitwise shift: `<` (left shift, e.g. `a < 8 + b`)
+* Left shift: `<`, used to combine bytes: `(a<8)+b` is `a*256+b`. `<` binds loosest of all
+  operators, so always parenthesize it: `a<8+b` means `a<(8+b)`, not `(a<8)+b`.
 
 ### Built-in Functions
 * **`SIGNED(x)`**: Interprets single byte `x` as a signed 8-bit integer (-128 to 127).
-* **`INT24(a, b, c)`**: Combines three bytes into a 24-bit unsigned integer `((a << 16) | (b << 8) | c)`.
-* **`MAX(x, y)`**: Returns the maximum of two values.
+* **`INT24(a:b:c)`**: Combines three bytes into a 24-bit unsigned integer (`a*65536 + b*256 + c`).
+* **`MAX(x:y)`**: Returns the larger of two values.
+
+Function arguments are separated by colons (`:`), not commas, since commas separate the CSV
+columns. Names are case-insensitive (`Signed(k)` works).
 
 ### Calculated / Inter-PID References
 * **`val{Pid Name}`**: Reads the resolved value of another PID in the preset. Useful for derived calculations (e.g., combining pack voltage and current into kilowatts):
