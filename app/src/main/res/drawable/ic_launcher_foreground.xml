@@ -24,20 +24,19 @@
         android:fillColor="#FFFFFF"
         android:pathData="M 69.5,37.2 m -2.5,0 a 2.5,2.5 0 1,0 5,0 a 2.5,2.5 0 1,0 -5,0" />
 
-    <!-- Hyundai IONIQ 6 'Electrified Streamliner' Silhouette -->
-    <!-- Distinctive dome roofline and iconic elliptical ducktail rear spoiler -->
+    <!-- Generic EV silhouette (streamlined sedan) -->
     <path
         android:fillColor="#00E676"
         android:pathData="M 31,62.5 C 31,59 32,57 34,56 C 33,54.8 33,54.2 35,54.2 C 36.5,54.2 37.5,55.5 39,56 C 44,53.5 50,51.5 55,51.5 C 61,51.5 66,54 68.5,57 C 71.5,58.5 74.5,60 75.5,61.5 C 76,62.5 75,63.5 73.5,63.8 C 71.5,64 69.5,64 68.5,64 C 67.5,61.8 65.5,61.8 64.5,64 C 58,64 50,64 44.5,64 C 43.5,61.8 41.5,61.8 40.5,64 C 37,64 33,64 31,62.5 Z" />
 
-    <!-- IONIQ 6 Parametric Pixel Rear Lightbar (Ducktail Spoiler) -->
+    <!-- Rear light bar -->
     <path
         android:strokeColor="#00E5FF"
         android:strokeWidth="1.6"
         android:strokeLineCap="round"
         android:pathData="M 33.5,54.5 L 36.5,54.5" />
 
-    <!-- IONIQ 6 Parametric Pixel Front Headlamp -->
+    <!-- Headlamp -->
     <path
         android:strokeColor="#00E5FF"
         android:strokeWidth="1.5"
