@@ -131,8 +131,9 @@ The secrets, set separately on each server: `SIDELOAD_KEYSTORE_B64` (the keystor
 base64-encoded), `SIDELOAD_KEY_ALIAS`, `SIDELOAD_STORE_PASSWORD` and `SIDELOAD_KEY_PASSWORD`. Every release must be signed with the
 same key, or testers can't install an update over their current copy, so back the key up.
 
-In a car, only Play-installed builds have been seen to appear so far (see the NAVIGATION
-section); the sideload APK is certain to work on the phone and in the Desktop Head Unit.
+**It does not appear in a car's Android Auto** (confirmed 2026-11-01; see the NAVIGATION
+section). It is for the phone app and for testing in the Desktop Head Unit; testers who need
+the car screen must install from the Play track.
 
 ### Testing Android Auto without a car
 
@@ -190,8 +191,9 @@ NAVIGATION debug build appeared and ran normally in Google's Desktop Head Unit (
 Android Auto without a car"). Android Auto on that phone hadn't been updated since before the
 car test that hid the app, so the likely difference is the head unit itself: the DHU connects
 through Android Auto's developer head-unit server, which appears to be more permissive than a
-real car. Until a sideloaded build has been seen in a real car, treat a Play track as the way
-to get the app into a car, and the DHU as the way to test without one.
+real car. That was confirmed the same day: the sideload APK below (a release build) did not
+appear in the car either. So a Play track is the only way to get the app into a car, and the
+DHU is the way to test without one.
 
 **Net effect:** this is, and is expected to remain, a sideloaded-via-a-private-
 Play-track, personal/small-group project - not a public Play Store app - unless
@@ -206,7 +208,8 @@ tested in the DHU (branch `feature/poi-map-with-content`, not merged). It works,
 Auto always shows its own content panel beside the drawing, which the app can't remove, resize
 or fill with a picture. The dashboard gets only what's left of the screen, there is no
 full-screen view even when parked, and surface taps only arrive once a map controller (with a
-pan button) is added. Declaring both NAVIGATION and POI doesn't help either: Android Auto then
+pan button) is added. On the other hand, a sideloaded POI-category app (a sibling Park Four app)
+does appear in a real car, so POI would allow distribution without Play. Declaring both NAVIGATION and POI doesn't help either: Android Auto then
 treats the app as the navigation app (its Google Maps card disappears), which brings back every
 NAVIGATION downside.
 
