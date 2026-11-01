@@ -127,9 +127,12 @@ jobs:
           cp app/build/outputs/apk/sideload/app-sideload.apk "$name"
           echo "apk=$name" >> "$GITHUB_OUTPUT"
 
+      # Gitea only (GitHub gets the APK through releases). Must be v3: v4
+      # refuses to run on any server other than github.com ("not currently
+      # supported on GHES"), and Gitea implements the v3 artifact protocol.
       - name: Keep the APK as a run artifact
-        if: steps.build.outputs.skip != 'true'
-        uses: actions/upload-artifact@v4
+        if: steps.build.outputs.skip != 'true' && github.server_url != 'https://github.com'
+        uses: actions/upload-artifact@v3
         with:
           name: ${{ steps.build.outputs.apk }}
           path: ${{ steps.build.outputs.apk }}
