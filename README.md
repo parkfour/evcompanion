@@ -120,10 +120,15 @@ builds. It is signed with a dedicated sideload key, never the Play upload key, r
 environment: `SIDELOAD_KEYSTORE_FILE`, `SIDELOAD_KEY_ALIAS`, `SIDELOAD_STORE_PASSWORD` and
 `SIDELOAD_KEY_PASSWORD` (without them it falls back to the debug key).
 
-For each version tag (`v*`), CI on the public GitHub mirror builds it and attaches
-`evcompanion-<tag>.apk` to that tag's release, once the repository has the secrets
-`SIDELOAD_KEYSTORE_B64` (the keystore, base64-encoded), `SIDELOAD_KEY_ALIAS`,
-`SIDELOAD_STORE_PASSWORD` and `SIDELOAD_KEY_PASSWORD`. Every release must be signed with the
+CI builds it in two places once the secrets below are set on that server:
+
+- **Gitea:** every push to `main` keeps `evcompanion-main-<commit>.apk` as a downloadable
+  artifact of the CI run, and each version tag (`v*`) attaches `evcompanion-<tag>.apk` to that
+  tag's release (creating the release if needed).
+- **GitHub mirror:** each version tag attaches `evcompanion-<tag>.apk` to that tag's release.
+
+The secrets, set separately on each server: `SIDELOAD_KEYSTORE_B64` (the keystore,
+base64-encoded), `SIDELOAD_KEY_ALIAS`, `SIDELOAD_STORE_PASSWORD` and `SIDELOAD_KEY_PASSWORD`. Every release must be signed with the
 same key, or testers can't install an update over their current copy, so back the key up.
 
 In a car, only Play-installed builds have been seen to appear so far (see the NAVIGATION
