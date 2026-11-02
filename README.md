@@ -220,6 +220,11 @@ Version 0.13.0. Actively developed for one vehicle and a small group of testers,
 through a Google Play testing track and as a sideload APK (see "Sideload APK"). Not yet
 submitted to Google Play for public distribution.
 
+## Privacy
+
+No accounts, ads or analytics; vehicle data stays on the phone. See [PRIVACY.md](PRIVACY.md)
+(published at https://parkfour.com/apps/evcompanion/privacy.html).
+
 ## License
 
 Copyright Park Four, LLC. Licensed under the
