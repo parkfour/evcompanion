@@ -63,11 +63,16 @@ on your device.
 - We don't use advertising or analytics SDKs, and we don't track you across apps or websites.
 - We don't require an account or collect your name, email address or contact list.
 
-## Data retention and deletion
-Everything the app stores is on your device. You can delete it at any time by clearing the
-app's storage (Android Settings > Apps > EV Companion > Storage > Clear storage) or by
-uninstalling the app. To have a feedback email you sent us deleted, write to
-apps@parkfour.com.
+## How to delete your data
+EV Companion has no accounts, and everything the app stores is on your device.
+
+1. **Data on your phone:** go to Android Settings > Apps > EV Companion > Storage >
+   Clear storage, or uninstall the app. This removes all vehicle data, debug logs and settings.
+2. **Feedback or debug logs you emailed to us:** email apps@parkfour.com with the subject
+   "Delete my EV Companion data" from the address you sent them from. We will delete those
+   emails and their attachments within 30 days and confirm by reply.
+
+We keep no other data about you.
 
 ## Children
 The app is not directed at children under 13, and we do not knowingly collect information
