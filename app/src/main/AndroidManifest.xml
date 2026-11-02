@@ -22,11 +22,9 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
-    <!-- Required by the Car App Library for the NAVIGATION category - Play Console's own
-         upload check rejects the app without these, on top of the category declaration itself.
-         See the EXPERIMENTAL note on the CarAppService below for why this app declares
-         NAVIGATION at all despite doing no real turn-by-turn routing. -->
-    <uses-permission android:name="androidx.car.app.NAVIGATION_TEMPLATES" />
+    <!-- POI category + MAP_TEMPLATES grants MapWithContentTemplate, whose map surface
+         (ACCESS_SURFACE) DashboardScreen draws the dashboard on. -->
+    <uses-permission android:name="androidx.car.app.MAP_TEMPLATES" />
     <uses-permission android:name="androidx.car.app.ACCESS_SURFACE" />
 
     <uses-feature android:name="android.hardware.bluetooth" android:required="true" />
@@ -64,14 +62,10 @@
             tools:ignore="ExportedService">
             <intent-filter>
                 <action android:name="androidx.car.app.CarAppService" />
-                <!-- EXPERIMENTAL: switched from IOT to unlock NavigationTemplate's
-                     SurfaceCallback (custom canvas drawing), which the Car App Library only
-                     grants to the NAVIGATION category - this app doesn't do real turn-by-turn
-                     navigation, so this is a deliberate, personal-use-only stretch of the
-                     category's intended purpose (see project notes for the tradeoffs discussed
-                     before doing this). Do not treat this as a template for what to declare in
-                     a real navigation app. -->
-                <category android:name="androidx.car.app.category.NAVIGATION" />
+                <!-- POI: the app lists nearby EV chargers (DashboardScreen's content panel) and
+                     hands taps off to the driver's navigation app. Not NAVIGATION, so it doesn't
+                     claim "navigate to..." voice requests and isn't Play-gated when sideloaded. -->
+                <category android:name="androidx.car.app.category.POI" />
             </intent-filter>
         </service>
 
@@ -89,7 +83,7 @@
 
         <meta-data
             android:name="androidx.car.app.minCarApiLevel"
-            android:value="1" />
+            android:value="7" /> <!-- MapWithContentTemplate -->
 
         <meta-data
             android:name="com.google.android.gms.car.application"

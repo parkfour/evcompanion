@@ -7,9 +7,9 @@ name: CI
 # Play builds (AABs) are still made locally: the release signing key is the
 # Play upload key, so it stays off CI. The sideload-apk job below builds a
 # separate APK, signed with its own sideload key, for direct download from
-# Gitea (every main push, and tag releases) and GitHub (tag releases). It is
-# for the phone app and the Desktop Head Unit only: cars' Android Auto hides
-# sideloaded NAVIGATION apps (confirmed; see README).
+# Gitea (every main push, and tag releases) and GitHub (tag releases). Since
+# 0.13.0 the app is POI-category, which Android Auto shows in cars when
+# sideloaded (unlike NAVIGATION; see README).
 
 on:
   push:

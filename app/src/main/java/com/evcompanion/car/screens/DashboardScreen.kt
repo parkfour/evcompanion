@@ -17,8 +17,12 @@ import androidx.car.app.SurfaceContainer
 import androidx.car.app.model.Action
 import androidx.car.app.model.ActionStrip
 import androidx.car.app.model.CarIcon
+import androidx.car.app.model.Pane
+import androidx.car.app.model.PaneTemplate
+import androidx.car.app.model.Row
 import androidx.car.app.model.Template
-import androidx.car.app.navigation.model.NavigationTemplate
+import androidx.car.app.navigation.model.MapController
+import androidx.car.app.navigation.model.MapWithContentTemplate
 import androidx.core.graphics.drawable.IconCompat
 import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.LifecycleOwner
@@ -64,16 +68,12 @@ fun promoteAt(order: MutableList<Int>, slot: Int) {
 }
 
 /**
- * EXPERIMENTAL hand-drawn dashboard, rendered directly onto the Car App Library's drawing
- * surface - which the host only grants to apps declaring the NAVIGATION category (see
- * AndroidManifest.xml); NavigationTemplate is rejected by the host under any other category,
- * including POI. This app does no real turn-by-turn navigation; NAVIGATION was declared
- * specifically to unlock this surface, a deliberate personal-use-only stretch of the category
- * (see project notes on the tradeoffs before doing this). If that ever causes trouble with the
- * Play developer account, this screen and the category declaration are the first things to
- * revert - the ListTemplate-based screens (HomeScreen, LiveDataScreen, etc.) are unaffected and
- * work under any category. When State of Charge is the hero, nearby chargers (OpenStreetMap)
- * are listed with tap-to-navigate handoff to the driver's navigation app.
+ * Hand-drawn dashboard, rendered directly onto the Car App Library's map surface via
+ * [MapWithContentTemplate] (Car API 7+), which the host grants to POI-category apps holding
+ * MAP_TEMPLATES (see AndroidManifest.xml). That template requires a content panel, so the host
+ * always shows a native list of nearby chargers (OpenStreetMap) beside the drawing; the host
+ * reports the uncovered part via onVisibleAreaChanged and the dashboard lays itself out inside
+ * it. Tapping a charger hands off to the driver's navigation app (Google Maps, Waze).
  *
  * Modeled on the real IONIQ 5 Companion iOS app's CarPlay screens: one big primary tile sitting
  * on the driver's side of the screen, plus a static 2-row grid of smaller tiles filling the rest -
@@ -215,7 +215,8 @@ class DashboardScreen(carContext: CarContext, private val container: AppContaine
             surface = surfaceContainer.surface
             surfaceWidth = surfaceContainer.width
             surfaceHeight = surfaceContainer.height
-            DebugFileLogger.i(TAG, "onSurfaceAvailable surfaceWidth=$surfaceWidth surfaceHeight=$surfaceHeight")
+            surfaceDensity = surfaceContainer.dpi / 160f
+            DebugFileLogger.i(TAG, "onSurfaceAvailable surfaceWidth=$surfaceWidth surfaceHeight=$surfaceHeight dpi=${surfaceContainer.dpi}")
             showTitle(4000L)
             redraw()
         }
@@ -323,6 +324,7 @@ class DashboardScreen(carContext: CarContext, private val container: AppContaine
             }
             DebugFileLogger.i(TAG, "onClick -> promoteAt(slot=$slot)")
             promoteAt(order, slot)
+            invalidate()
             val newlyPromoted = tiles[order[0]]
             if (newlyPromoted.id == "diagnostics" && autoScanDtcOnHero && dtcScanState is DtcScanState.Idle) {
                 container.pollingEngine.startDtcScan()
@@ -483,6 +485,7 @@ class DashboardScreen(carContext: CarContext, private val container: AppContaine
         lifecycleScope.launch {
             container.pollingEngine.values.collect { values ->
                 latestValues = values
+                invalidateHeroPanelThrottled()
                 recordGraphHistory(values)
                 activeDetail?.let { recordDetailGraphHistory(it, values) }
                 updateMotorDriveType(values)
@@ -525,8 +528,8 @@ class DashboardScreen(carContext: CarContext, private val container: AppContaine
 
     override fun onGetTemplate(): Template {
         activeDetail?.let {
-            return NavigationTemplate.Builder()
-                .setActionStrip(
+            return mapTemplate(
+
                     ActionStrip.Builder()
                         .addAction(
                             Action.Builder()
@@ -540,8 +543,7 @@ class DashboardScreen(carContext: CarContext, private val container: AppContaine
                                 .build()
                         )
                         .build()
-                )
-                .build()
+            )
         }
 
         val cycleAction = Action.Builder()
@@ -565,16 +567,118 @@ class DashboardScreen(carContext: CarContext, private val container: AppContaine
             .setOnClickListener { screenManager.push(HomeScreen(carContext, container)) }
             .build()
 
-        return NavigationTemplate.Builder()
-            .setActionStrip(
-                ActionStrip.Builder()
-                    .addAction(cycleAction)
-                    .addAction(themeAction)
-                    .addAction(flipSideAction)
-                    .addAction(menuAction)
+        return mapTemplate(
+            ActionStrip.Builder()
+                .addAction(cycleAction)
+                .addAction(themeAction)
+                .addAction(flipSideAction)
+                .addAction(menuAction)
+                .build()
+        )
+    }
+
+    private fun mapTemplate(actionStrip: ActionStrip): Template =
+        MapWithContentTemplate.Builder()
+            .setContentTemplate(heroPaneTemplate())
+            .setActionStrip(actionStrip)
+            // Experiment: does a MapController make the host forward surface taps (onClick)?
+            .setMapController(
+                MapController.Builder()
+                    .setMapActionStrip(ActionStrip.Builder().addAction(Action.PAN).build())
+                    .setPanModeListener { DebugFileLogger.i(TAG, "panMode=$it") }
                     .build()
             )
             .build()
+
+    private var lastHeroPanelMillis = 0L
+
+    /** Re-sends the hero panel at most once per [HERO_PANEL_REFRESH_MS] - the host throttles template updates. */
+    private fun invalidateHeroPanelThrottled() {
+        val now = System.currentTimeMillis()
+        if (now - lastHeroPanelMillis >= HERO_PANEL_REFRESH_MS) {
+            lastHeroPanelMillis = now
+            invalidate()
+        }
+    }
+
+    private fun currentHeroTile(): TileDef? {
+        val cfg = config ?: return null
+        val tiles = tilesForPage(cfg, page)
+        if (tiles.isEmpty()) return null
+        return tiles[currentOrder(tiles)[0]]
+    }
+
+    /**
+     * POI's MapWithContentTemplate always shows a host-owned content card on the driver's side.
+     * The host drops a Pane's image there, so the card carries only the hero's label/value and
+     * its actions; the hero itself is drawn on the surface underneath the card (see [heroRect]).
+     */
+    private fun heroPaneTemplate(): PaneTemplate {
+        val tile = currentHeroTile()
+        val pane = Pane.Builder()
+        if (tile == null) return PaneTemplate.Builder(pane.setLoading(true).build()).build()
+        val value = tile.values.firstOrNull()?.resolve(latestValues)
+        pane.addRow(Row.Builder().setTitle(tile.label).addText(formatGaugeValue(value, true, decimals(value))).build())
+        val actions = heroActions(tile).take(2)
+        actions.forEach { pane.addAction(it) }
+        heroCardHasActions = actions.isNotEmpty()
+        return PaneTemplate.Builder(pane.build()).build()
+    }
+
+    private var heroCardHasActions = false
+    private var surfaceDensity = 1f // the car display's, from SurfaceContainer.dpi - not carContext's (the phone's)
+
+    /**
+     * Surface rect for the hero: the left column (which the host excludes from visibleArea for its
+     * content card) below that card, down to the visible bottom.
+     * ponytail: the card's height isn't reported by the host - these dp heights were measured on
+     * the DHU (row-only vs row+button). Re-measure on the real head unit; a wrong guess only
+     * overlaps or wastes a strip, it can't hide the card.
+     */
+    private fun heroRect(): Rect? {
+        val area = visibleArea ?: return null
+        val density = surfaceDensity
+        val margin = (12 * density).toInt()
+        val cardBottom = ((if (heroCardHasActions) HERO_CARD_WITH_ACTIONS_DP else HERO_CARD_ROW_ONLY_DP) * density).toInt()
+        val r = Rect(margin, cardBottom + margin, area.left - margin, area.bottom)
+        DebugFileLogger.i(TAG, "heroRect=$r density=$density area=$area")
+        return r.takeIf { it.width() > 80 * density && it.height() > 80 * density }
+    }
+
+    private fun heroActions(tile: TileDef): List<Action> {
+        fun action(title: String, onClick: () -> Unit) =
+            Action.Builder().setTitle(title).setOnClickListener { onClick() }.build()
+        val actions = mutableListOf<Action>()
+        when {
+            tile.id == "diagnostics" -> {
+                val label = when (val st = dtcScanState) {
+                    is DtcScanState.Completed -> if (st.result.codes.isEmpty()) "Re-scan"
+                        else if (System.currentTimeMillis() < clearDtcArmedUntilMillis) "Confirm clear" else "Clear codes"
+                    is DtcScanState.Error -> "Retry"
+                    is DtcScanState.Scanning, is DtcScanState.Clearing -> null
+                    is DtcScanState.Idle -> "Scan"
+                }
+                if (label != null) actions += action(label) { handleDiagnosticsHeroClick(); invalidate() }
+            }
+            isSocHeroTile(tile) -> {
+                val nearest = EvChargerRepository.filterChargers(
+                    nearbyChargers, findValue(latestValues, SOC_PID_NAMES)?.value,
+                    socFastChargeThresholdPercent, minFastChargePowerKw, limit = 1,
+                ).chargers.firstOrNull()
+                if (nearest != null) actions += action("Nearest charger") { navigateToCharger(nearest) }
+            }
+        }
+        val detail = tile.detail?.let { config?.detailViews?.get(it) }
+        if (detail != null) {
+            actions += action("Full screen") {
+                activeDetail = detail
+                detailGraphHistory.clear()
+                updateDetailSubscriptions()
+                invalidate()
+                redraw()
+            }
+        }
+        return actions
     }
 
     private fun cyclePage() {
@@ -584,6 +688,7 @@ class DashboardScreen(carContext: CarContext, private val container: AppContaine
         updateSubscriptionsForPage()
         showTitle(4000L)
         checkAutoScanDiagnostics()
+        invalidate()
         redraw()
     }
 
@@ -674,15 +779,11 @@ class DashboardScreen(carContext: CarContext, private val container: AppContaine
      * every one of [secondaryCount] tiles at once - no scrolling.
      */
     private fun pageLayout(area: Rect, secondaryCount: Int): PageLayout {
-        val bigW = (area.width() * 0.38f).toInt()
-        val bigGap = (area.width() * 0.015f).toInt().coerceAtLeast(6)
-        val bigRect = if (driverOnRight) {
-            Rect(area.right - bigW, area.top, area.right, area.bottom)
-        } else {
-            Rect(area.left, area.top, area.left + bigW, area.bottom)
-        }
-        val gridLeft = if (driverOnRight) area.left else bigRect.right + bigGap
-        val gridRight = if (driverOnRight) bigRect.left - bigGap else area.right
+        // The hero sits under the host's content card, outside visibleArea (see heroRect); the
+        // grid gets all of the visible area. driverOnRight is moot - the host places the card.
+        val bigRect = heroRect() ?: Rect()
+        val gridLeft = area.left
+        val gridRight = area.right
         val gridWidth = (gridRight - gridLeft).coerceAtLeast(1)
 
         val cols = ((secondaryCount + 1) / 2).coerceAtLeast(1)
@@ -693,17 +794,20 @@ class DashboardScreen(carContext: CarContext, private val container: AppContaine
         return PageLayout(bigRect, gridLeft, area.top, cardW, cardH, gapX, gapY, cols)
     }
 
+    private var lockFailuresInARow = 0
+
     private fun redraw() {
         if (!isStarted) return
         val s = surface ?: return
-        if (!s.isValid) return
+        if (!s.isValid) { DebugFileLogger.w(TAG, "redraw: surface invalid"); return }
         val canvas = try {
-            s.lockCanvas(null)
+            s.lockCanvas(null).also { lockFailuresInARow = 0 }
         } catch (e: Exception) {
-            // This surface can report itself as non-null and valid yet still throw here; dropping
-            // our reference stops subsequent redraw() calls from retrying lockCanvas every poll
-            // tick until a fresh onSurfaceAvailable actually arrives.
-            surface = null
+            // Skip just this frame and keep the surface: the next redraw retries. The host can
+            // deliver the same surface twice in a row (MapWithContentTemplate does) and the first
+            // lock right after the second delivery can fail once; dropping the surface here used
+            // to freeze the dashboard on its first frame for good.
+            if (lockFailuresInARow++ == 0) DebugFileLogger.w(TAG, "lockCanvas failed (will retry): $e")
             null
         } ?: return
         try {
@@ -752,7 +856,7 @@ class DashboardScreen(carContext: CarContext, private val container: AppContaine
 
         val order = currentOrder(tiles)
         val layout = pageLayout(contentArea, order.size - 1)
-        drawPrimary(canvas, layout, tiles[order[0]])
+        if (!layout.bigRect.isEmpty) drawPrimary(canvas, layout, tiles[order[0]])
         drawSecondaryGrid(canvas, layout, order.drop(1).map { tiles[it] })
 
         if (titleVisibilityProgress > 0f) {
@@ -1250,16 +1354,19 @@ class DashboardScreen(carContext: CarContext, private val container: AppContaine
             socChargerHitBoxes.firstOrNull { it.first.contains(x, y) }
         } ?: return false
 
-        val charger = hit.second
-        DebugFileLogger.i(TAG, "handleSocHeroClick -> launching navigation for ${charger.name} at (${charger.latitude}, ${charger.longitude})")
+        navigateToCharger(hit.second)
+        return true
+    }
+
+    private fun navigateToCharger(charger: EvCharger) {
+        DebugFileLogger.i(TAG, "navigateToCharger -> ${charger.name} at (${charger.latitude}, ${charger.longitude})")
         val geoUri = Uri.parse("geo:${charger.latitude},${charger.longitude}?q=${Uri.encode("${charger.name}, ${charger.address}")}")
         val navIntent = Intent(CarContext.ACTION_NAVIGATE, geoUri)
         try {
             carContext.startCarApp(navIntent)
         } catch (e: Exception) {
-            DebugFileLogger.e(TAG, "handleSocHeroClick failed to start navigation: ${e.message}")
+            DebugFileLogger.e(TAG, "navigateToCharger failed to start navigation: ${e.message}")
         }
-        return true
     }
 
     private fun drawSocChargersHero(canvas: Canvas, inner: Rect, tile: TileDef) {
@@ -1858,6 +1965,10 @@ class DashboardScreen(carContext: CarContext, private val container: AppContaine
     companion object {
         private const val TAG = "DashboardScreen"
         private const val CLEAR_DTC_CONFIRM_WINDOW_MS = 5_000L
+        private const val HERO_PANEL_REFRESH_MS = 1_000L
+        private const val HERO_CARD_ROW_ONLY_DP = 115
+        private const val HERO_CARD_WITH_ACTIONS_DP = 212
+        private val SOC_PID_NAMES = listOf("State of Charge Display", "State of Charge")
         private val SPEED_PID_NAMES = listOf("Real Vehicle Speed", "001_Real Vehicle Speed", "Vehicle Speed", "000_Vehicle Speed")
         private val GEAR_P_PID_NAMES = listOf("001_Gear Position P", "Gear Position P", "GearP")
     }
