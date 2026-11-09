@@ -48,7 +48,7 @@ class DtcScannerTest {
         val driver = Elm327Driver(transport)
         driver.initialize()
 
-        val scanner = DtcScanner()
+        val scanner = DtcScanner { if (it == "7E4") "BMS (Battery)" else null } // name from the vehicle profile
         val result = scanner.scan(driver, listOf("7E4"))
 
         assertFalse(result.isClean)

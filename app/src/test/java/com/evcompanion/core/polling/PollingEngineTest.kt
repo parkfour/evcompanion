@@ -6,6 +6,8 @@ import com.evcompanion.core.obd.ObdTransportFactory
 import com.evcompanion.core.preset.PidRow
 import com.evcompanion.core.preset.Preset
 import com.evcompanion.core.preset.formula.Formula
+import com.evcompanion.core.vehicle.VehicleProfile
+import com.evcompanion.core.vehicle.VehicleProfileParser
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.TestScope
@@ -39,7 +41,12 @@ class PollingEngineTest {
     fun `minimumSafeInterval protects slow body ECUs from flooding`() {
         val factory = TestTransportFactory(FakeObdTransport())
         val engine = PollingEngine(factory, TestScope())
+        // The limits now live in the bundled IONIQ 5 profile - same values as the old hardcoded ones.
+        val json = java.io.File("src/main/assets/vehicles/ioniq5_awd_77kwh.json").readText()
+        engine.setVehicleProfile(VehicleProfileParser.parse(json).profile!!)
 
+        assertEquals(5_000L, engine.minimumSafeInterval("7E4", "0x220105")) // BMS aux/SOH, per-PID
+        assertEquals(500L, engine.minimumSafeInterval("7E9", "221234"))   // ECU not in profile: default
         assertEquals(25_000L, engine.minimumSafeInterval("7A0", "22C00B")) // TPMS
         assertEquals(30_000L, engine.minimumSafeInterval("730", "22F010")) // Cluster Odometer
         assertEquals(8_000L, engine.minimumSafeInterval("7B3", "220100"))  // Climate FATC
@@ -92,6 +99,33 @@ class PollingEngineTest {
     }
 
     @Test
+    fun `instant efficiency uses Battery Power even when it is a formula row`() = runTest {
+        // Same shape as the Ioniq 5 preset: power = current x voltage, not a raw PID.
+        val preset = Preset(
+            "eff", "Efficiency",
+            listOf(
+                PidRow("Battery Current", "Amps", "0x220101", "7E4", Formula.parse("a"), -500.0, 500.0, "A"),
+                PidRow("Battery DC Voltage", "Volts", "0x220101", "7E4", Formula.parse("b*4"), 0.0, 1000.0, "V"),
+                PidRow("Real Vehicle Speed", "Speed", "0x220100", "7B3", Formula.parse("a"), 0.0, 200.0, "mph"),
+                PidRow("Battery Power", "kW", "0x220101", "7E4", Formula.parse("val{Battery Current}*val{Battery DC Voltage}/1000"), -270.0, 270.0, "kW"),
+            ),
+        )
+        val fakeTransport = FakeObdTransport()
+        fakeTransport.respondTo("220101", "62 01 01 19 64") // 25 A x 400 V = 10 kW
+        fakeTransport.respondTo("220100", "62 01 00 32")    // 50 mph
+
+        val engine = PollingEngine(TestTransportFactory(fakeTransport), backgroundScope, timeProvider = { testScheduler.currentTime })
+        engine.setActivePreset(preset)
+        engine.subscribeNames(setOf("Battery Power", "Real Vehicle Speed"))
+        engine.connect("00:11:22:33:44:55")
+        runCurrent()
+
+        val values = engine.values.first { it.containsKey("Instant Efficiency") }
+        assertEquals(5.0, values["Instant Efficiency"]?.value ?: 0.0, 0.001) // 50 mph / 10 kW
+        engine.disconnect()
+    }
+
+    @Test
     fun `sticky header batching minimizes ATSH switches between cycles`() = runTest {
         val fakeTransport = FakeObdTransport()
         fakeTransport.respondTo("220101", "62 01 01 00 00")
@@ -101,6 +135,8 @@ class PollingEngineTest {
         val engine = PollingEngine(factory, backgroundScope, timeProvider = { testScheduler.currentTime })
 
         engine.setActivePreset(testPreset())
+        // Fast (100ms) ECUs come from the vehicle profile now, not hardcoded headers.
+        engine.setVehicleProfile(VehicleProfile(ecus = listOf(VehicleProfile.Ecu("7E4", minIntervalMs = 100), VehicleProfile.Ecu("7E2", minIntervalMs = 100))))
         engine.subscribeNames(setOf("Battery Power", "Motor RPM Front"))
 
         engine.connect("00:11:22:33:44:55")
@@ -143,5 +179,17 @@ class PollingEngineTest {
         val values = engine.values.first { it.containsKey("Motor RPM Front") }
         assertEquals(1000.0, values["Motor RPM Front"]?.value ?: 0.0, 0.001)
         engine.disconnect()
+    }
+
+    @Test
+    fun `tpms response is stale until the sensors report after wake`() {
+        fun hex(h: String) = h.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
+        // Real 22C00B payloads from the 2026-11-09 log: cached at wake, then first fresh report.
+        val stale = hex("FFFFFF80D34D010000D44E010000D34E010000D44E010000FF93B893B893B893B8")
+        val fresh = hex("FFFFFF80C642010000C641010000C242010000C3420100004193B893B893B893B8")
+        assertTrue(PollingEngine.isStaleTpms("22C00B", stale))
+        assertTrue(PollingEngine.isStaleTpms("0x22C00B", stale))
+        assertEquals(false, PollingEngine.isStaleTpms("22C00B", fresh))
+        assertEquals(false, PollingEngine.isStaleTpms("220101", stale))
     }
 }

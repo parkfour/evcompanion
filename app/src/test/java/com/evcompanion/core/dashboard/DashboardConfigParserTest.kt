@@ -217,7 +217,7 @@ class DashboardConfigParserTest {
         assertEquals("Battery Health", config.pages[2].title)
         assertEquals(5, config.pages[2].tiles.size)
         assertEquals("Charging", config.pages[3].title)
-        assertEquals(6, config.pages[3].tiles.size)
+        assertEquals(5, config.pages[3].tiles.size)
         assertEquals("Diagnostics", config.pages[4].title)
         assertEquals(4, config.pages[4].tiles.size)
 

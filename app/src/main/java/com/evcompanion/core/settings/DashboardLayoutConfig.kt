@@ -1,5 +1,6 @@
 package com.evcompanion.core.settings
 
+import com.evcompanion.core.units.UnitSystem
 import android.content.Context
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
@@ -20,6 +21,7 @@ private val MOTOR_DRIVE_TYPE_KEY = stringPreferencesKey("motor_drive_type")
 private val AUTO_SCAN_DTC_ON_HERO_KEY = booleanPreferencesKey("auto_scan_dtc_on_hero")
 private val SOC_FAST_CHARGE_THRESHOLD_KEY = intPreferencesKey("soc_fast_charge_threshold")
 private val MIN_FAST_CHARGE_POWER_KW_KEY = intPreferencesKey("min_fast_charge_power_kw")
+private val UNIT_SYSTEM_KEY = stringPreferencesKey("unit_system")
 
 /**
  * Persisted layout and theme preferences for [com.evcompanion.car.screens.DashboardScreen].
@@ -61,6 +63,15 @@ class DashboardLayoutConfig(private val context: Context) {
 
     suspend fun setMotorDriveType(type: MotorDriveType) {
         context.dashboardLayoutDataStore.edit { it[MOTOR_DRIVE_TYPE_KEY] = type.name }
+    }
+
+    /** Imperial (mi, mph, °F, psi) or metric (km, km/h, °C, kPa) for every displayed value. */
+    val unitSystem: Flow<UnitSystem> = context.dashboardLayoutDataStore.data.map {
+        it[UNIT_SYSTEM_KEY]?.let { name -> runCatching { UnitSystem.valueOf(name) }.getOrNull() } ?: UnitSystem.IMPERIAL
+    }
+
+    suspend fun setUnitSystem(system: UnitSystem) {
+        context.dashboardLayoutDataStore.edit { it[UNIT_SYSTEM_KEY] = system.name }
     }
 
     /** Whether to automatically initiate DTC scan when the Diagnostics tile is promoted to hero. */

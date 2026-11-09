@@ -18,6 +18,15 @@ class FormulaEvaluatorTest {
     }
 
     @Test
+    fun `aux battery temperature - real 22E011 payload from 2026-11-08 drive`() {
+        // 000_Auxillary Battery Temperature,0x22E011,((x<8)+y)/2-40,7E5 -- bytes 23-24 = 0x0075
+        val hex = "FFFFFFF801010000007B39DE05E31AAC393780485521FC00750801010100050000AC000700000000000000000000"
+        val b = hex.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
+        assertEquals(18.5, Formula.parse("((x<8)+y)/2-40").evaluate(bytes = b), 1e-9)
+        assertEquals(85.0, Formula.parse("u").evaluate(bytes = b), 1e-9) // existing Aux SOC row, same payload
+    }
+
+    @Test
     fun `simple division - cell voltage`() {
         // 000_Cell Voltage 001,C001,0x220102,e/50,2.70,4.30,V,7E4  -- 'e' = byte offset 4
         val formula = Formula.parse("e/50")

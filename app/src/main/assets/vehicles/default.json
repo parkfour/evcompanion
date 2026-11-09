@@ -1,0 +1,12 @@
+{
+  "name": "Generic EV",
+  "notes": "Fallback profile for presets without their own vehicles/<presetId>.json: standard OBD-II only, default polling limits, no charging auto-detection (no motor-speed roles).",
+  "roles": {
+    "speed": ["Vehicle Speed"],
+    "odometer": ["Odometer"]
+  },
+  "ecus": [
+    { "header": "7E0", "name": "Engine / Powertrain" },
+    { "header": "7E1", "name": "Transmission" }
+  ]
+}

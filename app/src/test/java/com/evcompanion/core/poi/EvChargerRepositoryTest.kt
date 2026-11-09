@@ -126,22 +126,32 @@ class EvChargerRepositoryTest {
     }
 
     @Test
-    fun parseOverpassJson_missingTagsFallBackAndUnknownPowerIsZero() {
-        val json = """{"elements":[
-            {"id":1,"lat":33.75,"lon":-84.38,"tags":{"brand":"EVgo","socket:type2_combo:output":"","charging_station:output":"22 kW;150 kW"}},
-            {"id":2,"lat":33.76,"lon":-84.38,"tags":{"amenity":"charging_station"}}
-        ]}"""
+    fun parseOpenChargeMapJson_readsPowerPlugsOperatorAndSkipsBadEntries() {
+        // Shape of a real api.openchargemap.io /v3/poi response (compact=false, verbose=false).
+        val json = """[
+            {"ID":318791,"OperatorInfo":{"Title":"ChargePoint"},"NumberOfPoints":null,
+             "AddressInfo":{"Title":"Whelch Dr","AddressLine1":"8603 Whelch Drive","Town":"Panama City Beach","Latitude":30.182,"Longitude":-85.781},
+             "Connections":[{"PowerKW":3.7,"Quantity":2},{"PowerKW":7.2}]},
+            {"ID":2,"AddressInfo":{"Title":"Fast site","Latitude":30.30,"Longitude":-85.80},
+             "Connections":[{"PowerKW":50.0,"Quantity":1},{"PowerKW":250.0,"Quantity":4}],"NumberOfPoints":6},
+            {"ID":3,"AddressInfo":{"Latitude":30.171,"Longitude":-85.80},"Connections":[]},
+            {"ID":4,"AddressInfo":{"Title":"no coordinates"}}
+        ]"""
 
-        val parsed = EvChargerRepository.parseOverpassJson(json, 33.75, -84.38)
+        val parsed = EvChargerRepository.parseOpenChargeMapJson(json, 30.17, -85.80)
 
-        val evgo = parsed.first { it.id == "1" }
-        assertEquals("EVgo", evgo.name)       // no name -> brand (operator missing)
-        assertEquals("EVgo", evgo.network)
-        assertEquals(150, evgo.maxPowerKw)    // blank first key skipped, max of "22 kW;150 kW"
-        val bare = parsed.first { it.id == "2" }
+        assertEquals(listOf("3", "318791", "2"), parsed.map { it.id }) // nearest first, ID 4 skipped
+        val cp = parsed.first { it.id == "318791" }
+        assertEquals("ChargePoint", cp.network)
+        assertEquals("8603 Whelch Drive, Panama City Beach", cp.address)
+        assertEquals(7, cp.maxPowerKw)  // max over connections
+        assertEquals(3, cp.plugCount)   // NumberOfPoints missing -> sum of Quantity (2 + default 1)
+        val fast = parsed.first { it.id == "2" }
+        assertEquals(250, fast.maxPowerKw)
+        assertEquals(6, fast.plugCount)
+        val bare = parsed.first { it.id == "3" }
         assertEquals("EV Charger", bare.name)
-        assertEquals(0, bare.maxPowerKw)      // unknown, not guessed
-        assertEquals(null, bare.network)
-        assertTrue(EvChargerRepository.filterChargers(parsed, 10.0, 30, 100).chargers.none { it.id == "2" })
+        assertEquals(0, bare.maxPowerKw) // unknown, not guessed
+        assertTrue(EvChargerRepository.filterChargers(parsed, 10.0, 30, 100).chargers.map { it.id } == listOf("2"))
     }
 }

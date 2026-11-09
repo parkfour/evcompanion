@@ -17,6 +17,7 @@ import com.evcompanion.core.preset.PidCategory
 import com.evcompanion.core.preset.Preset
 import com.evcompanion.core.preset.PresetEvaluator
 import com.evcompanion.core.preset.QueryGroup
+import com.evcompanion.core.vehicle.VehicleProfile
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -65,6 +66,18 @@ class PollingEngine(
      * user-picked PID name belongs to before subscribing. */
     val activePresetState: StateFlow<Preset?> = _activePresetState.asStateFlow()
 
+    private val _vehicleProfile = MutableStateFlow(VehicleProfile())
+    /** The active car's profile (roles, sign conventions, ECU limits/quirks) - see [VehicleProfile]. */
+    val vehicleProfile: StateFlow<VehicleProfile> = _vehicleProfile.asStateFlow()
+
+    fun setVehicleProfile(profile: VehicleProfile) {
+        _vehicleProfile.value = profile
+        driver?.receiveFilters = receiveFilters()
+    }
+
+    private fun receiveFilters(): Map<String, String> =
+        _vehicleProfile.value.ecus.mapNotNull { e -> e.receiveFilter?.let { e.header to it } }.toMap()
+
     private var transport: ObdTransport? = null
     private var driver: Elm327Driver? = null
     private var connectionForwardingJob: Job? = null
@@ -87,7 +100,7 @@ class PollingEngine(
     private val slowNameSubscriberCounts = mutableMapOf<String, Int>()
     private val mediumNameSubscriberCounts = mutableMapOf<String, Int>()
 
-    val dtcScanner = DtcScanner()
+    val dtcScanner = DtcScanner { header -> _vehicleProfile.value.ecu(header)?.name }
     private val efficiencyTracker = TripEfficiencyTracker()
 
     private val _dtcScanState = MutableStateFlow<DtcScanState>(DtcScanState.Idle)
@@ -120,7 +133,7 @@ class PollingEngine(
             }
             val headers = DtcScanner.discoverTargetHeaders(activePreset)
             val firstH = headers.firstOrNull()
-            _dtcScanState.value = DtcScanState.Scanning(firstH, 0f, DtcScanner.resolveEcuName(firstH))
+            _dtcScanState.value = DtcScanState.Scanning(firstH, 0f, dtcScanner.resolveEcuName(firstH))
             try {
                 val result = runDiagnosticRoutine { drv ->
                     dtcScanner.scan(drv, headers) { header, scanned, total, ecuName ->
@@ -195,7 +208,7 @@ class PollingEngine(
                     transport?.disconnect()
                     val newTransport = transportFactory.create(deviceAddress)
                     transport = newTransport
-                    driver = Elm327Driver(newTransport)
+                    driver = Elm327Driver(newTransport).also { it.receiveFilters = receiveFilters() }
 
                     connectionForwardingJob?.cancel()
                     connectionForwardingJob = scope.launch {
@@ -329,21 +342,11 @@ class PollingEngine(
     fun minimumSafeInterval(header: String?, modeAndPid: String): Long {
         val h = header?.uppercase() ?: ""
         val pid = modeAndPid.removePrefix("0x").removePrefix("0X").uppercase()
+        // Per-car limits (e.g. the IONIQ 5's slow TPMS/cluster ECUs) come from the vehicle profile.
+        val ecu = _vehicleProfile.value.ecu(h)
+        ecu?.pidIntervalsMs?.get(pid)?.let { return it }
+        ecu?.minIntervalMs?.let { return it }
         return when {
-            // TPMS ECU is low-speed and easily congested; causes cluster dropouts if polled fast
-            h == "7A0" -> 25_000L
-            // Cluster (CLU) / Odometer
-            h == "730" -> 30_000L
-            // Climate FATC: cabin/outdoor temperatures change slowly
-            h == "7B3" -> 8_000L
-            // Body control module & Integrated body unit (lights/switches)
-            h in listOf("770", "7C6") -> 1_500L
-            // BMS Aux 12V battery & SOH
-            h == "7E4" && pid == "220105" -> 5_000L
-            // BMS bulk individual cell voltages (lots of CAN frames)
-            h == "7E4" && pid in listOf("220102", "220103", "220104", "22010A", "22010B", "22010C") -> 3_000L
-            // Powertrain BMS live data & MCU motor RPM / accelerator
-            h in listOf("7E4", "7E2") -> 100L
             // Standard OBD-II Mode 01
             h.isEmpty() -> when {
                 pid.startsWith("010D") -> 100L // Speed
@@ -462,7 +465,10 @@ class PollingEngine(
                     }
                     val hex = bytes.joinToString("") { "%02X".format(it) }
                     DebugFileLogger.i(TAG, "DATA [${group.header} ${group.modeAndPid}]: $hex -> ${decoded.entries.joinToString { "${it.key}=${it.value}" }}")
-                    lock.withLock { lastKnownRaw.putAll(decoded) }
+                    lock.withLock {
+                        if (isStaleTpms(group.modeAndPid, bytes)) lastKnownRaw.keys.removeAll(decoded.keys)
+                        else lastKnownRaw.putAll(decoded)
+                    }
                     val interval = activeGroups[group] ?: FAST_POLL_INTERVAL_MILLIS
                     nextPollAt[group] = timeProvider() + interval
                     anySuccess = true
@@ -491,14 +497,19 @@ class PollingEngine(
                 }.toMap().toMutableMap()
 
                 // Synthesize efficiency metrics
-                val speedEntry = findSnapshotEntry(rawSnapshot, listOf("Real Vehicle Speed", "001_Real Vehicle Speed", "Vehicle Speed", "000_Vehicle Speed"))
-                val speedUnit = speedEntry?.let { rowsByName[it.key]?.unit?.replace("/", "")?.lowercase() }
-                val speedMph = speedEntry?.value?.let { if (speedUnit == "kmh" || speedUnit == "kph") it * 0.621371 else it }
-
-                val powerKw = findSnapshotValue(rawSnapshot, listOf("Battery Power", "000_Battery Power"))
-                val cedKwh = findSnapshotValue(rawSnapshot, listOf("Cumulative Energy Discharged", "000_Cumulative Energy Discharged"))
-                val cecKwh = findSnapshotValue(rawSnapshot, listOf("Cumulative Energy Charged", "000_Cumulative Energy Charged"))
-                val odoMiles = findSnapshotValue(rawSnapshot, listOf("002_Odometer", "Odometer", "001_Odometer", "000_Odometer"))
+                // Which PIDs play these roles (and their sign) comes from the vehicle profile.
+                val profile = _vehicleProfile.value
+                val all = rawSnapshot + calculated // formula rows like Battery Power are in calculated
+                fun inMiles(entry: Map.Entry<String, Double>?): Double? {
+                    val unit = entry?.let { rowsByName[it.key]?.unit?.replace("/", "")?.lowercase() }
+                    return entry?.value?.let { if (unit == "km" || unit == "kmh" || unit == "kph") it * 0.621371 else it }
+                }
+                val speedMph = inMiles(findSnapshotEntry(all, profile.roles.speed))
+                val powerKw = findSnapshotValue(all, profile.roles.packPower)
+                    ?.let { if (profile.packCurrentPositiveIsDischarge) it else -it }
+                val cedKwh = findSnapshotValue(all, profile.roles.energyDischarged)
+                val cecKwh = findSnapshotValue(all, profile.roles.energyCharged)
+                val odoMiles = inMiles(findSnapshotEntry(all, profile.roles.odometer))
 
                 val eff = efficiencyTracker.update(speedMph, powerKw, cedKwh, cecKwh, odoMiles)
 
@@ -517,7 +528,7 @@ class PollingEngine(
                     merged["004_CALC Instant Efficiency"] = dv
                 }
                 if (eff.tripDistanceMiles != null) {
-                    val dv = DecodedValue("Trip Distance", "TRIP MI", PidCategory.CALCULATED, eff.tripDistanceMiles, "mi", updatedNow)
+                    val dv = DecodedValue("Trip Distance", "TRIP", PidCategory.CALCULATED, eff.tripDistanceMiles, "mi", updatedNow)
                     merged["Trip Distance"] = dv
                     merged["004_CALC Trip Distance"] = dv
                 }
@@ -573,5 +584,14 @@ class PollingEngine(
         const val MEDIUM_POLL_INTERVAL_MILLIS = 2000L
         const val SLOW_POLL_INTERVAL_MILLIS = 8000L
         private const val RECONNECT_AFTER_FAILED_CYCLES = 5
+
+        /**
+         * Hyundai/Kia TPMS (22C00B) replays the previous trip's cached pressures/temps until the
+         * wheels roll; byte y (24) reads FF until the sensors report. Seen once (2026-11-09 log).
+         * ponytail: hardcoded to this PID, move to the vehicle profile if another car needs one.
+         */
+        internal fun isStaleTpms(modeAndPid: String, bytes: ByteArray): Boolean =
+            modeAndPid.removePrefix("0x").equals("22C00B", ignoreCase = true) &&
+                bytes.size > 24 && bytes[24] == 0xFF.toByte()
     }
 }

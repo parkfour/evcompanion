@@ -13,6 +13,12 @@ class Elm327Driver(private val transport: ObdTransport) {
     private var customCraActive = false
 
     /**
+     * Header -> CAN ID to receive on (ATCRA) for ECUs that don't reply on header+8, e.g. the
+     * IONIQ 5 body controller 770 -> 778. From the vehicle profile; set by PollingEngine.
+     */
+    var receiveFilters: Map<String, String> = emptyMap()
+
+    /**
      * Forces the next [requestPid] call to re-send `ATSH`, even if the header hasn't changed.
      * A garbled or failed response can leave the adapter's own internal state out of sync;
      * re-establishing the header gives the stream a clean resync point.
@@ -56,8 +62,9 @@ class Elm327Driver(private val transport: ObdTransport) {
             if (!response.contains("OK", ignoreCase = true)) {
                 throw ObdTransportException("Failed to set header to $header: $response")
             }
-            if (header.equals("770", ignoreCase = true)) {
-                runCatching { transport.sendRaw("ATCRA 778") }
+            val filter = receiveFilters[header.uppercase()]
+            if (filter != null) {
+                runCatching { transport.sendRaw("ATCRA $filter") }
                 customCraActive = true
             } else if (customCraActive) {
                 runCatching { transport.sendRaw("ATAR") }

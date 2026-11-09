@@ -12,6 +12,7 @@ import com.evcompanion.core.polling.PollingEngine
 import com.evcompanion.core.preset.Preset
 import com.evcompanion.core.preset.PresetRepository
 import com.evcompanion.core.settings.DashboardLayoutConfig
+import com.evcompanion.core.vehicle.VehicleProfileRepository
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -30,6 +31,7 @@ class AppContainer(context: Context) {
     val lastObdDeviceRepository = LastObdDeviceRepository(context)
     val dashboardLayoutConfig = DashboardLayoutConfig(context)
     val dashboardConfigRepository = DashboardConfigRepository(context)
+    val vehicleProfileRepository = VehicleProfileRepository(context)
     val vehicleLocationProvider = VehicleLocationProvider(context)
     val evChargerRepository = EvChargerRepository(context, vehicleLocationProvider, appScope)
     val pollingEngine = PollingEngine(
@@ -60,6 +62,13 @@ class AppContainer(context: Context) {
                 val customRows = dashboardConfig?.customPids.orEmpty().map { it.toPidRow() }
                 if (customRows.isEmpty()) base else Preset(base.id, base.displayName, base.rows + customRows)
             }.filterNotNull().collect { pollingEngine.setActivePreset(it) }
+        }
+
+        // The vehicle profile follows the active preset - see VehicleProfileRepository.
+        appScope.launch {
+            presetRepository.activePresetId.collect { id ->
+                pollingEngine.setVehicleProfile(vehicleProfileRepository.load(id))
+            }
         }
 
         // Reconnect to whatever adapter last actually worked, so the driver doesn't have to

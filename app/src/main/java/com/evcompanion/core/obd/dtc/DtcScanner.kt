@@ -12,36 +12,20 @@ import com.evcompanion.core.preset.Preset
  * (falling back to standard OBD broadcast `7DF`), ensuring full portability across different
  * vehicle presets (e.g. Ioniq 5, Ford Mustang Mach-E, Chevy Bolt, generic EVs).
  */
-class DtcScanner {
+class DtcScanner(
+    /** ECU display names come from the active vehicle profile - see VehicleProfile.Ecu.name. */
+    private val ecuNameLookup: (String) -> String? = { null },
+) {
+
+    fun resolveEcuName(header: String?): String {
+        if (header == null) return "Unknown"
+        val h = header.uppercase().trim()
+        if (h == "7DF") return "OBD Broadcast"
+        return ecuNameLookup(h) ?: "ECU $h"
+    }
 
     companion object {
         private const val TAG = "DtcScanner"
-
-        private val KNOWN_ECU_NAMES = mapOf(
-            "7DF" to "OBD Broadcast",
-            "7E4" to "BMS (Battery)",
-            "7E5" to "VCU (Vehicle Control)",
-            "7E2" to "MCU (Motor/Inverter)",
-            "7D1" to "ICCU (Charger/LDC)",
-            "7A4" to "IEB (Brakes)",
-            "7B3" to "FATC (Climate)",
-            "770" to "BCM (Body Control)",
-            "7A0" to "TPMS (Tires)",
-            "7C6" to "IBU (Integrated Body)",
-            "730" to "CLU (Cluster)",
-            // Ford / Mach-E
-            "7E7" to "BECM (Battery)",
-            "7E0" to "PCM (Powertrain)",
-            "7E6" to "SOBDMC (Front Motor)",
-            "726" to "BCM (Body Control)",
-            "760" to "ABS (Brakes)",
-        )
-
-        fun resolveEcuName(header: String?): String {
-            if (header == null) return "Unknown"
-            val h = header.uppercase().trim()
-            return KNOWN_ECU_NAMES[h] ?: "ECU $h"
-        }
 
         /**
          * Discovers target ECU header addresses from the active preset, always ensuring

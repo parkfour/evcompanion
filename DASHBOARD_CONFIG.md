@@ -64,6 +64,11 @@ works with presets that number their rows and ones that don't.
 | `series` | Array | Graph lines: `{ "pidNames": [...], "label": "...", "color": "#RRGGBB", "negate": false }`. |
 | `windowSeconds` | Number | How many seconds of history the graph shows (default `300`). History is kept in memory only. |
 
+Two tile ids get a special hero: `nearby_chargers` shows the nearby-charger list across the
+whole big slot, and `state_of_charge` shows the SoC dial above a shorter charger list.
+`motor_rpm` with three values (front RPM, rear RPM, pedal %) shows the pedal dial on the left
+and the RPM readouts on the right (rear only on a rear-drive car).
+
 ### Color rules (`gaugeColorRules`, `backgroundColorRules`)
 
 ```json

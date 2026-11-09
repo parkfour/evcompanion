@@ -20,12 +20,14 @@ class TripEfficiencyTracker(
     private var startCumDischargedKwh: Double? = null
     private var startCumChargedKwh: Double? = null
     private var smoothedInstantMiPerKwh: Double? = null
+    private var lastCumChargedKwh: Double? = null
 
     fun reset() {
         startOdometerMiles = null
         startCumDischargedKwh = null
         startCumChargedKwh = null
         smoothedInstantMiPerKwh = null
+        lastCumChargedKwh = null
     }
 
     /**
@@ -53,6 +55,16 @@ class TripEfficiencyTracker(
         }
         if (startOdometerMiles == null && odometerMiles != null && odometerMiles > 0.0) {
             startOdometerMiles = odometerMiles
+        }
+
+        // Charged-counter growth while stopped can't be regen - it's a plug-in charge stop. Shift the
+        // baseline past it so the trip's net energy (and so its average) only counts driving.
+        val prevCharged = lastCumChargedKwh
+        if (cumChargedKwh != null && cumChargedKwh > 0.0) {
+            if (prevCharged != null && startCumChargedKwh != null && (speedMph ?: 0.0) < 1.5 && cumChargedKwh > prevCharged) {
+                startCumChargedKwh = startCumChargedKwh!! + (cumChargedKwh - prevCharged)
+            }
+            lastCumChargedKwh = cumChargedKwh
         }
 
         // 1. Calculate trip distance & energy

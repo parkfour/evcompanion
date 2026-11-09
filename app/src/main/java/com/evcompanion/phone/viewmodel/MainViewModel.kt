@@ -17,6 +17,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
@@ -86,6 +88,41 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         container.dashboardConfigRepository.importOverride(jsonText)
     }
 
+    /** Name of the vehicle profile in effect for the active preset - see VehicleProfileRepository. */
+    val vehicleProfileName: StateFlow<String> = container.pollingEngine.vehicleProfile
+        .map { it.name }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "")
+
+    private val _vehicleProfileImported = MutableStateFlow(false)
+    val vehicleProfileImported: StateFlow<Boolean> = _vehicleProfileImported.asStateFlow()
+
+    private val _vehicleProfileWarnings = MutableStateFlow<List<String>>(emptyList())
+    val vehicleProfileWarnings: StateFlow<List<String>> = _vehicleProfileWarnings.asStateFlow()
+
+    /** Makes [jsonText] the vehicle profile for the active preset, until reset. */
+    fun importVehicleProfile(jsonText: String) = viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+        val presetId = container.presetRepository.activePresetId.first()
+        _vehicleProfileWarnings.value = container.vehicleProfileRepository.import(presetId, jsonText)
+        reloadVehicleProfile(presetId)
+    }
+
+    fun resetVehicleProfile() = viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+        val presetId = container.presetRepository.activePresetId.first()
+        container.vehicleProfileRepository.clear(presetId)
+        _vehicleProfileWarnings.value = emptyList()
+        reloadVehicleProfile(presetId)
+    }
+
+    /** Re-reads the active preset's profile into the polling engine (and the "imported" flag). */
+    fun refreshVehicleProfileState() = viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+        _vehicleProfileImported.value = container.vehicleProfileRepository.hasImported(container.presetRepository.activePresetId.first())
+    }
+
+    private fun reloadVehicleProfile(presetId: String?) {
+        container.pollingEngine.setVehicleProfile(container.vehicleProfileRepository.load(presetId))
+        _vehicleProfileImported.value = container.vehicleProfileRepository.hasImported(presetId)
+    }
+
     private val _presetImportError = MutableStateFlow<String?>(null)
     val presetImportError: StateFlow<String?> = _presetImportError.asStateFlow()
 
@@ -104,6 +141,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun setDebugFeaturesEnabled(enabled: Boolean) =
         com.evcompanion.core.debug.DebugFileLogger.setEnabled(getApplication(), enabled)
+
+    val unitSystem: StateFlow<com.evcompanion.core.units.UnitSystem> = container.dashboardLayoutConfig.unitSystem
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), com.evcompanion.core.units.UnitSystem.IMPERIAL)
+
+    fun setUnitSystem(system: com.evcompanion.core.units.UnitSystem) = viewModelScope.launch {
+        container.dashboardLayoutConfig.setUnitSystem(system)
+    }
 
     val autoScanDtcOnHero: StateFlow<Boolean> = container.dashboardLayoutConfig.autoScanDtcOnHero
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), false)

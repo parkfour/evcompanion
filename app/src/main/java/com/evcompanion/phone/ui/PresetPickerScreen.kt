@@ -21,6 +21,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -49,6 +50,10 @@ fun PresetPickerScreen(viewModel: MainViewModel) {
     val presetImportError by viewModel.presetImportError.collectAsState()
     val debugEnabled by viewModel.debugFeaturesEnabled.collectAsState()
     val autoScanDtc by viewModel.autoScanDtcOnHero.collectAsState()
+    val unitSystem by viewModel.unitSystem.collectAsState()
+    val vehicleProfileName by viewModel.vehicleProfileName.collectAsState()
+    val vehicleProfileImported by viewModel.vehicleProfileImported.collectAsState()
+    val vehicleProfileWarnings by viewModel.vehicleProfileWarnings.collectAsState()
     val socThreshold by viewModel.socFastChargeThreshold.collectAsState()
     val minPowerKw by viewModel.minFastChargePowerKw.collectAsState()
     val context = LocalContext.current
@@ -66,6 +71,16 @@ fun PresetPickerScreen(viewModel: MainViewModel) {
                 context.contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() }
             } ?: return@launch
             viewModel.importDashboardConfig(text)
+        }
+    }
+
+    val pickVehicleJson = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        uri ?: return@rememberLauncherForActivityResult
+        scope.launch {
+            val text = withContext(Dispatchers.IO) {
+                context.contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() }
+            } ?: return@launch
+            viewModel.importVehicleProfile(text)
         }
     }
 
@@ -203,6 +218,62 @@ fun PresetPickerScreen(viewModel: MainViewModel) {
                         Text("Warning: $warning", style = androidx.compose.material3.MaterialTheme.typography.bodySmall)
                     }
                 }
+            }
+            item {
+                Text(
+                    "Vehicle profile",
+                    style = androidx.compose.material3.MaterialTheme.typography.titleMedium,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                )
+            }
+            item {
+                LaunchedEffect(Unit) { viewModel.refreshVehicleProfileState() }
+                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        if (vehicleProfileImported) "Using your imported profile: $vehicleProfileName"
+                        else "Using the bundled profile: $vehicleProfileName",
+                    )
+                    Text(
+                        "Car-specific behaviour beyond the PIDs: which PID is speed/odometer/pack current, " +
+                            "ECU polling limits, charging detection. Applies to the selected preset.",
+                        style = androidx.compose.material3.MaterialTheme.typography.bodySmall,
+                    )
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        OutlinedButton(onClick = { pickVehicleJson.launch(arrayOf("application/json", "text/plain")) }) {
+                            Text("Import vehicle profile JSON")
+                        }
+                        TextButton(onClick = { uriHandler.openUri("https://github.com/parkfour/evcompanion/blob/main/VEHICLE_CONFIG.md") }) {
+                            Text("(how to)")
+                        }
+                    }
+                    if (vehicleProfileImported) {
+                        OutlinedButton(onClick = { viewModel.resetVehicleProfile() }) {
+                            Text("Reset to default")
+                        }
+                    }
+                    vehicleProfileWarnings.forEach { warning ->
+                        Text("Warning: $warning", style = androidx.compose.material3.MaterialTheme.typography.bodySmall)
+                    }
+                }
+            }
+            item {
+                ListItem(
+                    headlineContent = { Text("Metric units") },
+                    supportingContent = { Text("km, km/h, °C, kPa, kWh/100 km. Off: mi, mph, °F, psi, mi/kWh.") },
+                    trailingContent = {
+                        Switch(
+                            checked = unitSystem == com.evcompanion.core.units.UnitSystem.METRIC,
+                            onCheckedChange = { metric ->
+                                viewModel.setUnitSystem(
+                                    if (metric) com.evcompanion.core.units.UnitSystem.METRIC else com.evcompanion.core.units.UnitSystem.IMPERIAL,
+                                )
+                            },
+                        )
+                    },
+                )
             }
             item {
                 Text(

@@ -29,8 +29,10 @@ import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.lifecycleScope
 import com.evcompanion.AppContainer
 import com.evcompanion.R
+import com.evcompanion.car.screens.dashboard.ChargingDetector
 import com.evcompanion.car.screens.dashboard.GaugeDrawing
 import com.evcompanion.car.screens.dashboard.GraphHistoryTracker
+import com.evcompanion.car.screens.dashboard.LineChartDrawing
 import com.evcompanion.car.screens.dashboard.MotorDriveTypeTracker
 import com.evcompanion.core.dashboard.DashboardConfig
 import com.evcompanion.core.debug.DebugFileLogger
@@ -40,6 +42,10 @@ import com.evcompanion.core.dashboard.DetailViewDef
 import com.evcompanion.core.dashboard.HeroType
 import com.evcompanion.core.dashboard.TileDef
 import com.evcompanion.core.dashboard.findValue
+import com.evcompanion.core.units.UnitSystem
+import com.evcompanion.core.units.Units
+import com.evcompanion.core.units.Units.inUnits
+import com.evcompanion.core.vehicle.VehicleProfile
 import com.evcompanion.core.obd.dtc.DtcScanState
 import com.evcompanion.core.poi.EvCharger
 import com.evcompanion.core.poi.EvChargerRepository
@@ -121,6 +127,8 @@ class DashboardScreen(carContext: CarContext, private val container: AppContaine
     private var driverOnRight = false
     private var motorDriveType: MotorDriveType = MotorDriveType.UNKNOWN
     private val motorDriveTracker = MotorDriveTypeTracker()
+    private var chargingDetector = ChargingDetector()
+    private var chargingDetectorProfile: VehicleProfile? = null
     private var motorFrontFadeProgress = 1f
     private var motorFadeJob: Job? = null
     private var subscribedNames: Set<String> = emptySet()
@@ -128,12 +136,17 @@ class DashboardScreen(carContext: CarContext, private val container: AppContaine
     private var subscribedSlowNames: Set<String> = emptySet()
     private var latestValues: Map<String, DecodedValue> = emptyMap()
     private var autoScanDtcOnHero = false
+    private var unitSystem = UnitSystem.IMPERIAL
     private var dtcScanState: DtcScanState = DtcScanState.Idle
     private var clearDtcArmedUntilMillis = 0L
     private var socFastChargeThresholdPercent = 30
     private var minFastChargePowerKw = 100
     private var nearbyChargers: List<EvCharger> = emptyList()
     private val socChargerHitBoxes = mutableListOf<Pair<Rect, EvCharger>>()
+
+    // Smallest number size each multi-value tile has needed, per slot size - see drawTileContent.
+    // ponytail: never grows back within a session; reset on config reload if that ever bites.
+    private val gridTextSizes = mutableMapOf<String, Float>()
 
     // Per-page display order of catalog indices into that page's tiles: index 0 is the promoted
     // big value, the rest fill the secondary grid row-major. Keyed by page index (not a fixed enum
@@ -300,7 +313,6 @@ class DashboardScreen(carContext: CarContext, private val container: AppContaine
                 }
                 DebugFileLogger.i(TAG, "onClick -> show detail view for '$detailId'")
                 activeDetail = detail
-                detailGraphHistory.clear()
                 updateDetailSubscriptions()
                 invalidate()
                 redraw()
@@ -424,6 +436,14 @@ class DashboardScreen(carContext: CarContext, private val container: AppContaine
         }
 
         lifecycleScope.launch {
+            container.dashboardLayoutConfig.unitSystem.collect {
+                unitSystem = it
+                invalidate()
+                redraw()
+            }
+        }
+
+        lifecycleScope.launch {
             container.pollingEngine.dtcScanState.collect {
                 dtcScanState = it
                 redraw()
@@ -487,8 +507,9 @@ class DashboardScreen(carContext: CarContext, private val container: AppContaine
                 latestValues = values
                 invalidateHeroPanelThrottled()
                 recordGraphHistory(values)
-                activeDetail?.let { recordDetailGraphHistory(it, values) }
+                recordDetailGraphHistory(values)
                 updateMotorDriveType(values)
+                checkAutoSwitchToCharging(values)
                 redraw()
             }
         }
@@ -618,8 +639,11 @@ class DashboardScreen(carContext: CarContext, private val container: AppContaine
         val pane = Pane.Builder()
         if (tile == null) return PaneTemplate.Builder(pane.setLoading(true).build()).build()
         val value = tile.values.firstOrNull()?.resolve(latestValues)
-        pane.addRow(Row.Builder().setTitle(tile.label).addText(formatGaugeValue(value, true, decimals(value))).build())
-        val actions = heroActions(tile).take(2)
+        val detail = activeDetail
+        pane.addRow(Row.Builder().setTitle(detail?.label ?: tile.label).addText(formatGaugeValue(value, true, decimals(value))).build())
+        // In a detail view the card is just a caption - no buttons keeps it short (row-only height),
+        // so the detail panels get the full width below it (see detailRect). Back is in the strip.
+        val actions = if (detail != null) emptyList() else heroActions(tile).take(2)
         actions.forEach { pane.addAction(it) }
         heroCardHasActions = actions.isNotEmpty()
         return PaneTemplate.Builder(pane.build()).build()
@@ -645,6 +669,10 @@ class DashboardScreen(carContext: CarContext, private val container: AppContaine
         return r.takeIf { it.width() > 80 * density && it.height() > 80 * density }
     }
 
+    /** Detail view: the full surface width below the (row-only) host card - not just the visible column. */
+    private fun detailRect(area: Rect): Rect =
+        heroRect()?.let { Rect(it.left, it.top, area.right, it.bottom) } ?: area
+
     private fun heroActions(tile: TileDef): List<Action> {
         fun action(title: String, onClick: () -> Unit) =
             Action.Builder().setTitle(title).setOnClickListener { onClick() }.build()
@@ -662,7 +690,7 @@ class DashboardScreen(carContext: CarContext, private val container: AppContaine
             }
             isSocHeroTile(tile) -> {
                 val nearest = EvChargerRepository.filterChargers(
-                    nearbyChargers, findValue(latestValues, SOC_PID_NAMES)?.value,
+                    chargersForThisCar(), findValue(latestValues, SOC_PID_NAMES)?.value,
                     socFastChargeThresholdPercent, minFastChargePowerKw, limit = 1,
                 ).chargers.firstOrNull()
                 if (nearest != null) actions += action("Nearest charger") { navigateToCharger(nearest) }
@@ -672,7 +700,6 @@ class DashboardScreen(carContext: CarContext, private val container: AppContaine
         if (detail != null) {
             actions += action("Full screen") {
                 activeDetail = detail
-                detailGraphHistory.clear()
                 updateDetailSubscriptions()
                 invalidate()
                 redraw()
@@ -684,7 +711,33 @@ class DashboardScreen(carContext: CarContext, private val container: AppContaine
     private fun cyclePage() {
         val pageCount = config?.pages?.size ?: return
         if (pageCount == 0) return
-        page = (page + 1) % pageCount
+        showPage((page + 1) % pageCount)
+    }
+
+    /**
+     * Jumps to the charging page (the one holding the "charging_power" tile) once per charging
+     * session - see [ChargingDetector]. Skipped while a full-screen detail view is open.
+     */
+    private fun checkAutoSwitchToCharging(values: Map<String, DecodedValue>) {
+        // PID roles, sign convention and thresholds all come from the vehicle profile.
+        val profile = container.pollingEngine.vehicleProfile.value
+        if (profile !== chargingDetectorProfile) {
+            chargingDetectorProfile = profile
+            chargingDetector = ChargingDetector(
+                minChargeCurrentAmps = profile.charging.minChargeCurrentAmps,
+                stoppedRpm = profile.charging.maxMotorRpm,
+                holdMillis = profile.charging.holdSeconds * 1000L,
+            )
+        }
+        val chargeAmps = findValue(values, profile.roles.packCurrent)?.value?.let(profile::chargeCurrent)
+        val rpms = profile.roles.motorSpeeds.map { findValue(values, listOf(it))?.value }
+        if (!chargingDetector.update(chargeAmps, rpms, System.currentTimeMillis())) return
+        val chargingPage = config?.pages?.indexOfFirst { p -> p.tiles.any { it.id == "charging_power" } } ?: -1
+        if (chargingPage >= 0 && chargingPage != page && activeDetail == null) showPage(chargingPage)
+    }
+
+    private fun showPage(index: Int) {
+        page = index
         updateSubscriptionsForPage()
         showTitle(4000L)
         checkAutoScanDiagnostics()
@@ -817,7 +870,7 @@ class DashboardScreen(carContext: CarContext, private val container: AppContaine
             val detail = activeDetail
             if (area != null && area.width() > 0 && area.height() > 0) {
                 if (detail != null) {
-                    drawDetailPanels(canvas, area, detail)
+                    drawDetailPanels(canvas, detailRect(area), detail)
                 } else if (cfg != null) {
                     drawMasterDetail(canvas, area, cfg)
                 }
@@ -870,10 +923,17 @@ class DashboardScreen(carContext: CarContext, private val container: AppContaine
     // ---- Detail view: ported from the former TileDetailScreen, now rendered in-place on this
     // screen's own surface instead of a pushed Screen - see activeDetail's doc for why. ----
 
-    private fun recordDetailGraphHistory(detail: DetailViewDef, values: Map<String, DecodedValue>) {
-        detail.panels.forEachIndexed { panelIndex, panel ->
-            if (panel.type != DetailPanelType.GRAPH) return@forEachIndexed
-            detailGraphHistory.record("$panelIndex", panel.series, panel.windowSeconds, values)
+    /**
+     * Records every detail view's graphs on every tick, not just the open one, so opening "Full
+     * screen" mid-charge shows the last few minutes instead of an empty chart. Keyed by the
+     * view's label, since panel indices repeat across views.
+     */
+    private fun recordDetailGraphHistory(values: Map<String, DecodedValue>) {
+        config?.detailViews?.values?.forEach { detail ->
+            detail.panels.forEachIndexed { panelIndex, panel ->
+                if (panel.type != DetailPanelType.GRAPH) return@forEachIndexed
+                detailGraphHistory.record("${detail.label}:$panelIndex", panel.series, panel.windowSeconds, values)
+            }
         }
     }
 
@@ -924,7 +984,7 @@ class DashboardScreen(carContext: CarContext, private val container: AppContaine
         val radius = minOf(rect.width(), rect.height()) * 0.4f
         GaugeDrawing.drawBigGauge(
             canvas, rect.exactCenterX(), rect.exactCenterY(), radius, fraction,
-            valueText = value?.value?.let { "${it.toInt()}${if (panel.showUnits) value.unit else ""}" } ?: "--",
+            valueText = value?.inUnits(unitSystem)?.let { "${it.value.toInt()}${if (panel.showUnits) it.unit else ""}" } ?: "--",
             label = panel.label ?: "",
             ringColor = { frac -> panel.gaugeColorRules?.resolve(value?.value, latestValues) ?: activeTheme.resolveGaugeColor(frac) },
             theme = activeTheme,
@@ -932,7 +992,7 @@ class DashboardScreen(carContext: CarContext, private val container: AppContaine
     }
 
     private fun drawDetailValuePanel(canvas: Canvas, rect: Rect, panel: DetailPanelDef) {
-        val value = detailResolvedValue(panel)
+        val value = detailResolvedValue(panel)?.inUnits(unitSystem)
         val unit = if (panel.showUnits) value?.unit ?: "" else ""
         val decimals = if (unit.isBlank() || unit == "%") 0 else 1
         val textSize = (rect.width() * 0.16f).coerceIn(16f, 48f).coerceAtMost(rect.height() * 0.3f)
@@ -945,17 +1005,25 @@ class DashboardScreen(carContext: CarContext, private val container: AppContaine
     }
 
     private fun drawDetailGraphPanel(canvas: Canvas, rect: Rect, panel: DetailPanelDef, panelIndex: Int) {
-        val seriesData = panel.series.mapIndexed { i, s ->
-            detailGraphHistory.pointsFor("$panelIndex", i) to (s.color ?: activeTheme.defaultGraphColor)
+        val key = "${activeDetail?.label}:$panelIndex"
+        val series = panel.series.mapIndexed { i, s ->
+            LineChartDrawing.Series(
+                label = s.label ?: s.pidNames.firstOrNull().orEmpty(),
+                color = s.color ?: activeTheme.defaultGraphColor,
+                unit = Units.convert(0.0, detailGraphHistory.unitFor(key, i).orEmpty(), unitSystem).second,
+                samples = detailGraphHistory.samplesFor(key, i).map { (t, v) ->
+                    t to Units.convert(v, detailGraphHistory.unitFor(key, i).orEmpty(), unitSystem).first
+                },
+            )
         }
-        if (seriesData.all { it.first.size < 2 }) {
+        if (series.none { it.samples.size >= 2 }) {
             GaugeDrawing.drawReadout(
                 canvas, rect.exactCenterX(), rect.exactCenterY().toFloat(), rect.width() * 0.08f,
                 panel.label ?: "", "--", theme = activeTheme,
             )
             return
         }
-        GaugeDrawing.drawLineGraph(canvas, rect, panel.label ?: "", seriesData, theme = activeTheme, perSeriesNormalize = panel.normalizePerSeries)
+        LineChartDrawing.draw(canvas, rect, panel.label ?: "", series, panel.windowSeconds, System.currentTimeMillis(), activeTheme)
     }
 
     private fun drawDashboardTitle(
@@ -1054,6 +1122,7 @@ class DashboardScreen(carContext: CarContext, private val container: AppContaine
         when {
             tile.id == "diagnostics" -> drawDiagnosticsHero(canvas, inner, tile)
             isSocHeroTile(tile) -> drawSocChargersHero(canvas, inner, tile)
+            tile.id == "motor_rpm" && tile.values.size > 2 -> drawMotorsPedalHero(canvas, inner, tile)
             tile.hero.type == HeroType.GRAPH -> drawGraphHero(canvas, inner, tile)
             tile.hero.type == HeroType.DIAL && tile.values.size > 1 -> {
                 // Motor RPM shows the front motor (index 0) by default - once this vehicle is
@@ -1100,6 +1169,39 @@ class DashboardScreen(carContext: CarContext, private val container: AppContaine
         )
     }
 
+    /**
+     * Combined MOTORS / PEDAL tile as hero: accelerator dial (values[2], 0-100%) on the left, motor
+     * RPM readouts on the right - front over rear, or rear alone once known RWD-only.
+     */
+    private fun drawMotorsPedalHero(canvas: Canvas, inner: Rect, tile: TileDef) {
+        val half = inner.left + inner.width() / 2
+        val left = Rect(inner.left, inner.top, half, inner.bottom)
+        val right = Rect(half, inner.top, inner.right, inner.bottom)
+
+        val accel = tile.values[2]
+        val pedal = accel.resolve(latestValues)
+        val fraction = pedal?.value?.let { (it / 100.0).coerceIn(0.0, 1.0) }
+        GaugeDrawing.drawBigGauge(
+            canvas, left.exactCenterX(), left.exactCenterY(), minOf(left.width(), left.height()) * 0.40f, fraction,
+            valueText = formatGaugeValue(pedal, tile.showUnits, 0),
+            label = accel.sublabel ?: "ACCEL",
+            ringColor = { frac -> activeTheme.resolveGaugeColor(frac) },
+            theme = activeTheme,
+        )
+
+        val motors = if (motorDriveType == MotorDriveType.RWD_ONLY) listOf(tile.values[1]) else tile.values.take(2)
+        val cellH = right.height() / motors.size
+        val textSize = (right.width() * 0.16f).coerceIn(18f, 72f).coerceAtMost(cellH * 0.38f)
+        motors.forEachIndexed { i, sub ->
+            val shown = sub.resolve(latestValues)?.inUnits(unitSystem)
+            val text = GaugeDrawing.formatValue(shown?.value, if (tile.showUnits) shown?.unit ?: "" else "", decimals(shown))
+            GaugeDrawing.drawReadout(
+                canvas, right.exactCenterX(), right.top + cellH * i + cellH / 2f, textSize,
+                sub.sublabel ?: "", text, maxWidth = right.width() * 0.9f, theme = activeTheme,
+            )
+        }
+    }
+
     /** A time-series line graph instead of the usual grid - see [graphHistory]. */
     private fun drawGraphHero(canvas: Canvas, inner: Rect, tile: TileDef) {
         val seriesData = tile.hero.series.mapIndexed { i, s ->
@@ -1130,13 +1232,18 @@ class DashboardScreen(carContext: CarContext, private val container: AppContaine
             drawLightsIndicator(canvas, rect, tile)
             return
         }
+        if (tile.id == "motor_rpm" && motorDriveType == MotorDriveType.RWD_ONLY && tile.values.size > 2) {
+            // Combined motors + pedal tile: drop the front cell, keep the rest as a normal grid.
+            drawTileContent(canvas, rect, tile.copy(id = "motor_rpm_rwd", values = tile.values.drop(1)), big)
+            return
+        }
         if (tile.id == "motor_rpm" && motorDriveType == MotorDriveType.RWD_ONLY) {
             // Front motor is never meaningful once this vehicle is known to be RWD-only (see
             // MotorDriveTypeTracker) - instead of a half-faded two-cell grid, show just the rear
             // value centered in the whole tile, same readout style a grid cell would use.
             val rear = tile.values.getOrNull(1)
             val value = rear?.resolve(latestValues)
-            val formatted = GaugeDrawing.formatValue(value?.value, if (tile.showUnits) value?.unit ?: "" else "", decimals(value))
+            val formatted = value?.inUnits(unitSystem).let { shown -> GaugeDrawing.formatValue(shown?.value, if (tile.showUnits) shown?.unit ?: "" else "", decimals(shown)) }
             val textSize = (rect.width() * (if (big) 0.12f else 0.20f)).coerceIn(14f, 60f).coerceAtMost(rect.height() * 0.34f)
             GaugeDrawing.drawReadout(
                 canvas, rect.exactCenterX(), rect.exactCenterY().toFloat(), textSize,
@@ -1161,7 +1268,7 @@ class DashboardScreen(carContext: CarContext, private val container: AppContaine
                 )
                 return
             }
-            val text = GaugeDrawing.formatValue(value?.value, if (tile.showUnits) value?.unit ?: "" else "", decimals(value))
+            val text = value?.inUnits(unitSystem).let { shown -> GaugeDrawing.formatValue(shown?.value, if (tile.showUnits) shown?.unit ?: "" else "", decimals(shown)) }
             if (big) {
                 GaugeDrawing.drawBigReadout(canvas, rect.exactCenterX(), rect.exactCenterY(), rect.width().toFloat(), tile.label, text, theme = activeTheme)
             } else {
@@ -1182,11 +1289,23 @@ class DashboardScreen(carContext: CarContext, private val container: AppContaine
         }
         canvas.drawText(tile.label, rect.exactCenterX(), rect.top + headingSize * 1.4f, headingPaint)
         val gridArea = Rect(rect.left, (rect.top + headingSize * 2f).toInt(), rect.right, rect.bottom)
-        GaugeDrawing.gridCells(gridArea, tile.values.size).forEachIndexed { i, cell ->
+        val cells = GaugeDrawing.gridCells(gridArea, tile.values.size)
+        val texts = tile.values.map { sub ->
+            sub.resolve(latestValues)?.inUnits(unitSystem).let { shown -> GaugeDrawing.formatValue(shown?.value, if (tile.showUnits) shown?.unit ?: "" else "", decimals(shown)) }
+        }
+        // One number size for the whole tile - the smallest any cell needs to fit - so the numbers
+        // line up instead of each cell shrinking on its own to make room for its unit.
+        val fitted = cells.indices.minOfOrNull { i ->
+            val base = (cells[i].rect.height() * (if (big) 0.34f else 0.42f)).coerceIn(10f, 60f)
+            GaugeDrawing.fitReadoutSize(base, texts[i], cells[i].rect.width() * 0.9f, activeTheme)
+        } ?: 10f
+        // Only ever shrink while the slot stays the same size - otherwise "9.9" -> "10.2" -> "9.8"
+        // makes the whole tile pulse as the extra digit comes and goes.
+        val slotKey = "${tile.id}:${rect.width()}x${rect.height()}"
+        val cellTextSize = minOf(fitted, gridTextSizes[slotKey] ?: Float.MAX_VALUE).also { gridTextSizes[slotKey] = it }
+        cells.forEachIndexed { i, cell ->
             val sub = tile.values[i]
-            val value = sub.resolve(latestValues)
-            val cellTextSize = (cell.rect.height() * (if (big) 0.34f else 0.42f)).coerceIn(10f, 60f)
-            val formatted = GaugeDrawing.formatValue(value?.value, if (tile.showUnits) value?.unit ?: "" else "", decimals(value))
+            val formatted = texts[i]
             // The Motor RPM tile's front cell (index 0) fades out in place once this vehicle is
             // found to be RWD-only, instead of relayouting - see MotorDriveTypeTracker.
             val alpha = if (tile.id == "motor_rpm" && i == 0) motorFrontFadeProgress else 1f
@@ -1217,7 +1336,10 @@ class DashboardScreen(carContext: CarContext, private val container: AppContaine
      */
     private fun drawLightsIndicator(canvas: Canvas, rect: Rect, tile: TileDef) {
         val head = (tile.values.getOrNull(0)?.resolve(latestValues)?.value ?: 0.0) > 0.0
-        val high = (tile.values.getOrNull(1)?.resolve(latestValues)?.value ?: 0.0) > 0.0
+        // ponytail: high beam disabled - 0x22BC03 {e:1} turned out to be a parked/stopped flag (set
+        // for the whole of a charge stop in the 2026-11-08 capture). Restore once a controlled
+        // high-beam toggle capture identifies the real bit.
+        val high = false
         val brake = (tile.values.getOrNull(2)?.resolve(latestValues)?.value ?: 0.0) > 0.0
 
         val headingSize = (rect.height() * 0.1f).coerceAtMost(rect.width() * 0.1f)
@@ -1333,12 +1455,17 @@ class DashboardScreen(carContext: CarContext, private val container: AppContaine
         return speed <= 1.0 && (gearP == null || gearP > 0.5)
     }
 
-    private fun formatGaugeValue(value: DecodedValue?, showUnits: Boolean, decimals: Int): String {
+    private fun formatGaugeValue(raw: DecodedValue?, showUnits: Boolean, decimals: Int): String {
+        val value = raw?.inUnits(unitSystem)
         if (value?.value == null) return "--"
         if (value.unit.equals("REGEN", ignoreCase = true)) return "REGEN"
         val num = if (decimals == 0) "${value.value.toInt()}" else String.format(Locale.US, "%.${decimals}f", value.value)
         return if (showUnits && value.unit.isNotBlank()) "$num ${value.unit}" else num
     }
+
+    /** Nearby chargers as this car sees them: unusable sites hidden, power capped (vehicle profile). */
+    private fun chargersForThisCar(): List<EvCharger> =
+        container.pollingEngine.vehicleProfile.value.chargerLimits.applyTo(nearbyChargers)
 
     private fun isSocHeroTile(tile: TileDef): Boolean {
         if (tile.id == "state_of_charge" || tile.id == "soc") return true
@@ -1377,35 +1504,38 @@ class DashboardScreen(carContext: CarContext, private val container: AppContaine
         val totalH = inner.height().toFloat()
         val totalW = inner.width().toFloat()
 
-        // Upper section: SoC Dial Gauge (~36% of card height)
-        val dialH = (totalH * 0.36f).toInt()
-        val dialRect = Rect(inner.left, inner.top, inner.right, inner.top + dialH)
-
         val value = tile.values.firstOrNull()?.resolve(latestValues)
         val currentSoc = value?.value
-        val gauge = tile.gaugeRange ?: (0.0..100.0)
-        val fraction = currentSoc?.let { v -> ((v - gauge.start) / (gauge.endInclusive - gauge.start)).coerceIn(0.0, 1.0) }
-        val radius = minOf(dialRect.width(), dialRect.height()) * 0.38f
-        val valueText = formatGaugeValue(value, tile.showUnits, 0)
-        GaugeDrawing.drawBigGauge(
-            canvas, dialRect.exactCenterX(), dialRect.exactCenterY(), radius, fraction,
-            valueText = valueText,
-            label = tile.label,
-            ringColor = { frac -> tile.gaugeColorRules?.resolve(currentSoc, latestValues) ?: activeTheme.resolveGaugeColor(frac) },
-            theme = activeTheme,
-        )
 
-        // Divider line
-        val dividerY = inner.top + dialH + 2f
-        val dividerPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = activeTheme.cardBorderColor ?: Color.argb(40, 255, 255, 255)
-            strokeWidth = 2f
+        // The "nearby_chargers" tile is the list alone (SoC has its own tile on that page); any
+        // other SoC tile promoted to hero gets the SoC dial on top (~36% of card height).
+        val dividerY = if (tile.id == "nearby_chargers") {
+            inner.top.toFloat()
+        } else {
+            val dialH = (totalH * 0.36f).toInt()
+            val dialRect = Rect(inner.left, inner.top, inner.right, inner.top + dialH)
+            val gauge = tile.gaugeRange ?: (0.0..100.0)
+            val fraction = currentSoc?.let { v -> ((v - gauge.start) / (gauge.endInclusive - gauge.start)).coerceIn(0.0, 1.0) }
+            val radius = minOf(dialRect.width(), dialRect.height()) * 0.38f
+            GaugeDrawing.drawBigGauge(
+                canvas, dialRect.exactCenterX(), dialRect.exactCenterY(), radius, fraction,
+                valueText = formatGaugeValue(value, tile.showUnits, 0),
+                label = tile.label,
+                ringColor = { frac -> tile.gaugeColorRules?.resolve(currentSoc, latestValues) ?: activeTheme.resolveGaugeColor(frac) },
+                theme = activeTheme,
+            )
+            val y = inner.top + dialH + 2f
+            val dividerPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                color = activeTheme.cardBorderColor ?: Color.argb(40, 255, 255, 255)
+                strokeWidth = 2f
+            }
+            canvas.drawLine(inner.left + totalW * 0.05f, y, inner.right - totalW * 0.05f, y, dividerPaint)
+            y
         }
-        canvas.drawLine(inner.left + totalW * 0.05f, dividerY, inner.right - totalW * 0.05f, dividerY, dividerPaint)
 
         // Lower section: Nearby EV Chargers List
         val filterResult = EvChargerRepository.filterChargers(
-            chargers = nearbyChargers,
+            chargers = chargersForThisCar(),
             currentSocPercent = currentSoc,
             socThresholdPercent = socFastChargeThresholdPercent,
             minPowerKw = minFastChargePowerKw,
@@ -1413,12 +1543,12 @@ class DashboardScreen(carContext: CarContext, private val container: AppContaine
         )
 
         val contentTop = dividerY + 8f
-        val headerH = (totalH * 0.07f).coerceIn(24f, 34f)
+        val headerH = (totalH * 0.08f).coerceIn(28f, 40f)
 
         // Header Title
         val headerTitlePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             color = if (filterResult.isSmartFilterActive) Color.rgb(255, 179, 0) else activeTheme.headingColor
-            textSize = (headerH * 0.55f).coerceIn(12f, 18f)
+            textSize = (headerH * 0.62f).coerceIn(14f, 24f)
             typeface = Typeface.DEFAULT_BOLD
             textAlign = Paint.Align.LEFT
         }
@@ -1426,16 +1556,20 @@ class DashboardScreen(carContext: CarContext, private val container: AppContaine
         val headerLeft = inner.left + totalW * 0.04f
         val headerY = contentTop + headerH * 0.65f
         val boltPrefix = if (filterResult.isSmartFilterActive) "⚡ " else "⚡ "
-        canvas.drawText("$boltPrefix${filterResult.title}", headerLeft, headerY, headerTitlePaint)
+        val headerText = "$boltPrefix${filterResult.title}"
+        canvas.drawText(headerText, headerLeft, headerY, headerTitlePaint)
+        val headerRight = headerLeft + headerTitlePaint.measureText(headerText)
 
         if (filterResult.subtitle != null) {
             val subPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
                 color = Color.rgb(255, 196, 64)
-                textSize = (headerH * 0.42f).coerceIn(10f, 14f)
+                textSize = (headerH * 0.45f).coerceIn(12f, 18f)
                 typeface = Typeface.DEFAULT
                 textAlign = Paint.Align.RIGHT
             }
-            canvas.drawText(filterResult.subtitle, inner.right - totalW * 0.04f, headerY, subPaint)
+            // Only when it fits beside the title - the title is already amber while auto-filtering.
+            val subLeft = inner.right - totalW * 0.04f - subPaint.measureText(filterResult.subtitle)
+            if (subLeft > headerRight + 12f) canvas.drawText(filterResult.subtitle, inner.right - totalW * 0.04f, headerY, subPaint)
         }
 
         // Charger items
@@ -1459,9 +1593,14 @@ class DashboardScreen(carContext: CarContext, private val container: AppContaine
             return
         }
 
-        val rowCount = chargers.size
+        // Only as many rows as fit at a readable height - the last one used to spill out of the
+        // tile when the card's height left less than 3 x 36px for the list.
         val rowGap = 6f
-        val rowH = ((availableListH - (rowCount - 1) * rowGap) / rowCount).coerceIn(36f, 62f)
+        val minRowH = 48f
+        val rowsThatFit = ((availableListH + rowGap) / (minRowH + rowGap)).toInt().coerceAtLeast(1)
+        val shownChargers = chargers.take(rowsThatFit)
+        val rowCount = shownChargers.size
+        val rowH = ((availableListH - (rowCount - 1) * rowGap) / rowCount).coerceIn(minRowH, 90f)
 
         val cardBgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             color = Color.argb(45, 255, 255, 255)
@@ -1474,13 +1613,13 @@ class DashboardScreen(carContext: CarContext, private val container: AppContaine
         }
         val namePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             color = activeTheme.textPrimaryColor
-            textSize = (rowH * 0.32f).coerceIn(12f, 18f)
+            textSize = (rowH * 0.34f).coerceIn(14f, 28f)
             typeface = Typeface.DEFAULT_BOLD
             textAlign = Paint.Align.LEFT
         }
         val detailPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             color = activeTheme.textSecondaryColor
-            textSize = (rowH * 0.25f).coerceIn(10f, 14f)
+            textSize = (rowH * 0.26f).coerceIn(12f, 21f)
             typeface = activeTheme.labelTypeface
             textAlign = Paint.Align.LEFT
         }
@@ -1489,7 +1628,7 @@ class DashboardScreen(carContext: CarContext, private val container: AppContaine
         }
         val kwTextPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             color = Color.BLACK
-            textSize = (rowH * 0.26f).coerceIn(10f, 15f)
+            textSize = (rowH * 0.28f).coerceIn(12f, 22f)
             typeface = Typeface.DEFAULT_BOLD
             textAlign = Paint.Align.CENTER
         }
@@ -1499,12 +1638,12 @@ class DashboardScreen(carContext: CarContext, private val container: AppContaine
         }
         val navTextPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             color = Color.WHITE
-            textSize = (rowH * 0.26f).coerceIn(10f, 15f)
+            textSize = (rowH * 0.28f).coerceIn(12f, 22f)
             typeface = Typeface.DEFAULT_BOLD
             textAlign = Paint.Align.CENTER
         }
 
-        chargers.forEachIndexed { index, charger ->
+        shownChargers.forEachIndexed { index, charger ->
             val rowTop = listTop + index * (rowH + rowGap)
             val rowRectF = RectF(
                 inner.left + totalW * 0.03f,
@@ -1526,7 +1665,7 @@ class DashboardScreen(carContext: CarContext, private val container: AppContaine
             val btnTop = rowRectF.centerY() - btnH / 2f
 
             // NAV ➔ button
-            val navBtnW = (rowRectF.width() * 0.18f).coerceIn(52f, 80f)
+            val navBtnW = navTextPaint.measureText("NAV ➔") + btnH * 0.5f
             val navBtnRight = rowRectF.right - 8f
             val navBtnLeft = navBtnRight - navBtnW
             val navRectF = RectF(navBtnLeft, btnTop, navBtnRight, btnTop + btnH)
@@ -1535,7 +1674,7 @@ class DashboardScreen(carContext: CarContext, private val container: AppContaine
             canvas.drawText("NAV ➔", navRectF.centerX(), navBaseline, navTextPaint)
 
             // kW Badge pill
-            val kwBtnW = (rowRectF.width() * 0.17f).coerceIn(48f, 75f)
+            val kwBtnW = kwTextPaint.measureText("350kW") + btnH * 0.4f
             val kwBtnRight = navBtnLeft - 6f
             val kwBtnLeft = kwBtnRight - kwBtnW
             val kwRectF = RectF(kwBtnLeft, btnTop, kwBtnRight, btnTop + btnH)
@@ -1569,7 +1708,7 @@ class DashboardScreen(carContext: CarContext, private val container: AppContaine
             canvas.drawText(nameText, textLeft, nameY, namePaint)
 
             // Details: distance • address/network • stalls
-            val distText = charger.distanceMiles?.let { String.format(Locale.US, "%.1f mi", it) } ?: ""
+            val distText = charger.distanceMiles?.let { val (d, u) = Units.convert(it, "mi", unitSystem); String.format(Locale.US, "%.1f %s", d, u) } ?: ""
             val rawDetail = listOfNotNull(
                 distText.ifBlank { null },
                 (charger.network ?: charger.address).ifBlank { null },

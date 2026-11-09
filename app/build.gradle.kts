@@ -27,13 +27,21 @@ android {
     compileSdk = 36
 
     defaultConfig {
-        applicationId = "com.parkfour.evcompanion"
+        applicationId = "com.parkfour.evcompanion.xyzzy"
         minSdk = 26
         targetSdk = 36
-        versionCode = 48
-        versionName = "0.13.0"
+        versionCode = 52
+        versionName = "0.13.4"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+        // Open Charge Map key for nearby chargers: local.properties (gitignored) or the
+        // OCM_API_KEY env var in CI. Blank = charger lookup disabled, the app still builds.
+        val localProps = Properties().apply {
+            rootProject.file("local.properties").takeIf { it.exists() }?.inputStream()?.use { load(it) }
+        }
+        val ocmKey = localProps.getProperty("OCM_API_KEY") ?: System.getenv("OCM_API_KEY") ?: ""
+        buildConfigField("String", "OCM_API_KEY", "\"$ocmKey\"")
     }
 
     signingConfigs {

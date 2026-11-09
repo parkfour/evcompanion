@@ -67,7 +67,7 @@ Phone app:
 
 ### Bring your own car
 
-Everything vehicle-specific lives in two files you can replace from the **Preset** tab.
+Everything vehicle-specific lives in three files you can replace from the **Preset** tab.
 Both persist across restarts until you choose otherwise.
 
 - **PID file** - a Torque Pro-style custom-PID CSV
@@ -83,6 +83,12 @@ Both persist across restarts until you choose otherwise.
   Start from `app/src/main/assets/dashboards/default.json`; the schema is defined in
   `core/dashboard/DashboardConfig.kt`. Problems in an imported file are listed as
   warnings under the button rather than failing the whole import.
+- **Vehicle profile** - a JSON file with the car-specific behaviour beyond the PIDs:
+  which PID is speed/odometer/pack current/motor speed, the pack-current sign, per-ECU
+  polling limits and adapter quirks, and charging-detection thresholds. Use
+  **Import vehicle profile JSON** (applies to the selected preset); **Reset to default**
+  returns to the bundled one. See [VEHICLE_CONFIG.md](VEHICLE_CONFIG.md); bundled
+  profiles are in `app/src/main/assets/vehicles/`.
 
 ### Debugging features
 
@@ -198,9 +204,13 @@ so older Android Auto hosts can't run it). The trade-offs:
 ## Other known limitations
 
 - **PID formulas are reverse-engineered, not vendor-documented.** The IONIQ 5
-  preset's accelerator, brake, and headlight/high-beam PIDs were derived from
-  analyzing a single passive drive-log capture (no controlled ground-truth
-  test), and may need further correction.
+  preset's accelerator, brake, and headlight PIDs were derived from drive-log
+  captures and may need further correction. A controlled light test
+  (2026-11-09) found no high-beam signal in any polled PID, so the lights
+  indicator never shows HIGH.
+- **Tire values appear only once the wheels roll.** After the car wakes, the
+  TPMS module repeats the previous trip's pressures and temperatures until the
+  sensors report, so the app shows "--" until then.
 - **One pushed-`Screen` surface limitation, worked around but not fully
   explained.** Android Auto hosts tested so far never handed a *second*,
   separately-pushed `Screen` a working drawing surface (`Surface.lockCanvas()`
@@ -216,7 +226,7 @@ so older Android Auto hosts can't run it). The trade-offs:
 
 ## Status
 
-Version 0.13.0. Actively developed for one vehicle and a small group of testers, distributed
+Version 0.13.4. Actively developed for one vehicle and a small group of testers, distributed
 through a Google Play testing track and as a sideload APK (see "Sideload APK"). Not yet
 submitted to Google Play for public distribution.
 

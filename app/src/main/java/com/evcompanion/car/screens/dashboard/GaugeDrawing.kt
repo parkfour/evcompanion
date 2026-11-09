@@ -152,8 +152,22 @@ object GaugeDrawing {
             this.textSize = textSize
             typeface = theme.valueTypeface
         }
-        valuePaint.textSize = shrinkToFit(valuePaint, valueText, maxWidth)
-        canvas.drawText(valueText, centerX, centerY, valuePaint)
+        // Number at full size, unit small beside it (a "mi/kWh"-style unit stacked as a fraction) -
+        // so a long unit doesn't shrink the number. Shrinks the pair only if it still won't fit.
+        val (num, unit) = splitUnit(valueText)
+        val size = fitReadoutSize(textSize, valueText, maxWidth, theme)
+        valuePaint.textSize = size
+        valuePaint.textAlign = Paint.Align.LEFT
+        val unitPaint = Paint(valuePaint).apply {
+            color = withAlpha(theme.textSecondaryColor)
+            typeface = theme.labelTypeface
+        }
+        val numW = valuePaint.measureText(num)
+        val gap = if (unit.isEmpty()) 0f else size * UNIT_GAP
+        val left = centerX - (numW + gap + unitWidth(unit, unitPaint, size)) / 2f
+        canvas.drawText(num, left, centerY, valuePaint)
+        drawUnit(canvas, unit, left + numW + gap, centerY, size, unitPaint)
+        valuePaint.textAlign = Paint.Align.CENTER
 
         val labelPaint = Paint(valuePaint).apply {
             this.textSize = textSize * 0.45f
@@ -162,6 +176,63 @@ object GaugeDrawing {
         }
         labelPaint.textSize = shrinkToFit(labelPaint, label, maxWidth)
         canvas.drawText(label, centerX, centerY + textSize * 0.6f, labelPaint)
+    }
+
+    /** A readout's unit ("kW") is drawn at this fraction of the number's size... */
+    private const val UNIT_SCALE = 0.45f
+    /** ...and each half of a fraction unit ("mi" over "kWh") at this fraction. */
+    private const val FRACTION_SCALE = 0.36f
+    private const val UNIT_GAP = 0.1f
+
+    /** "3.4 mi/kWh" -> ("3.4", "mi/kWh"); a value with no unit -> (value, ""). */
+    fun splitUnit(valueText: String): Pair<String, String> {
+        val split = valueText.lastIndexOf(' ')
+        return if (split > 0) valueText.substring(0, split) to valueText.substring(split + 1) else valueText to ""
+    }
+
+    private fun unitWidth(unit: String, paint: Paint, numberSize: Float): Float {
+        if (unit.isEmpty()) return 0f
+        val parts = unit.split('/', limit = 2)
+        return if (parts.size == 2) {
+            paint.textSize = numberSize * FRACTION_SCALE
+            maxOf(paint.measureText(parts[0]), paint.measureText(parts[1]))
+        } else {
+            paint.textSize = numberSize * UNIT_SCALE
+            paint.measureText(unit)
+        }
+    }
+
+    private fun drawUnit(canvas: Canvas, unit: String, x: Float, baseline: Float, numberSize: Float, paint: Paint) {
+        if (unit.isEmpty()) return
+        val parts = unit.split('/', limit = 2)
+        if (parts.size != 2) {
+            paint.textSize = numberSize * UNIT_SCALE
+            paint.textAlign = Paint.Align.LEFT
+            canvas.drawText(unit, x, baseline, paint)
+            return
+        }
+        // Stacked fraction: numerator top, rule, denominator sitting on the number's baseline.
+        val w = unitWidth(unit, paint, numberSize)
+        paint.textAlign = Paint.Align.CENTER
+        val cx = x + w / 2f
+        canvas.drawText(parts[0], cx, baseline - numberSize * 0.42f, paint)
+        canvas.drawText(parts[1], cx, baseline, paint)
+        val ruleY = baseline - numberSize * 0.33f
+        val rule = Paint(paint).apply { strokeWidth = (numberSize * 0.03f).coerceAtLeast(1f) }
+        canvas.drawLine(x, ruleY, x + w, ruleY, rule)
+    }
+
+    /**
+     * The number size [drawReadout] will actually use for [valueText] - [textSize], shrunk only if
+     * number + unit won't fit [maxWidth]. Lets a tile size all its cells to the smallest fit.
+     */
+    fun fitReadoutSize(textSize: Float, valueText: String, maxWidth: Float, theme: DashboardTheme = DefaultDashboardTheme): Float {
+        val (num, unit) = splitUnit(valueText)
+        val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { this.textSize = textSize; typeface = theme.valueTypeface }
+        val numW = paint.measureText(num)
+        paint.typeface = theme.labelTypeface
+        val total = numW + (if (unit.isEmpty()) 0f else textSize * UNIT_GAP) + unitWidth(unit, paint, textSize)
+        return if (total > maxWidth && total > 0f) textSize * (maxWidth / total) else textSize
     }
 
     /** Shrinks [paint]'s already-set text size so [text] measures within [maxWidth]; never grows it. */

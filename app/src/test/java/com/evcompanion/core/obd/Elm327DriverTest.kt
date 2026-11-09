@@ -59,7 +59,8 @@ class Elm327DriverTest {
         val transport = FakeObdTransport()
         transport.respondTo("22BC03", "62 BC 03 00 00 00 00")
         transport.respondTo("220102", "62 01 02 AA BB")
-        val driver = Elm327Driver(transport)
+        // From the IONIQ 5 vehicle profile (ecus[].receiveFilter) - set by PollingEngine.
+        val driver = Elm327Driver(transport).apply { receiveFilters = mapOf("770" to "778") }
 
         driver.requestPid("0x22BC03", "770")
         driver.requestPid("0x220102", "7E4")

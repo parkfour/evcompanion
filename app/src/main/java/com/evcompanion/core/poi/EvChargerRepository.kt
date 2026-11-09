@@ -1,6 +1,7 @@
 package com.evcompanion.core.poi
 
 import android.content.Context
+import com.evcompanion.BuildConfig
 import com.evcompanion.core.debug.DebugFileLogger
 import com.evcompanion.core.location.VehicleLocationProvider
 import kotlinx.coroutines.CoroutineScope
@@ -14,7 +15,6 @@ import kotlinx.coroutines.launch
 import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
-import java.net.URLEncoder
 import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.pow
@@ -68,86 +68,97 @@ class EvChargerRepository(
         }
     }
 
+    // After a failed lookup, wait before trying again (1 min, doubling to 15) instead of retrying
+    // on every location update - the old behaviour hammered the server 566 times in one drive.
+    private var failures = 0
+    private var retryAfterMillis = 0L
+
     private fun fetchLiveChargers(lat: Double, lon: Double) {
+        val apiKey = BuildConfig.OCM_API_KEY
+        if (apiKey.isBlank()) {
+            DebugFileLogger.w(tag, "No Open Charge Map key in this build (OCM_API_KEY) - charger lookup disabled")
+            return
+        }
+        if (System.currentTimeMillis() < retryAfterMillis) {
+            lastQueriedLat = null // retry on a later location update once the wait is over
+            lastQueriedLon = null
+            return
+        }
         scope.launch(Dispatchers.IO) {
             try {
-                val query = """[out:json][timeout:4];node["amenity"="charging_station"](around:35000,$lat,$lon);out body 15;"""
-                val urlString = "https://overpass-api.de/api/interpreter?data=" + URLEncoder.encode(query, "UTF-8")
-                val url = URL(urlString)
+                val url = URL(
+                    "https://api.openchargemap.io/v3/poi/?output=json&compact=false&verbose=false" +
+                        "&latitude=$lat&longitude=$lon&distance=$SEARCH_RADIUS_KM&distanceunit=KM&maxresults=$MAX_RESULTS",
+                )
                 val conn = (url.openConnection() as HttpURLConnection).apply {
-                    connectTimeout = 4000
-                    readTimeout = 4000
+                    connectTimeout = 8000
+                    readTimeout = 15000
                     requestMethod = "GET"
-                    setRequestProperty("User-Agent", "EVCompanion/0.12 (Android Auto)")
+                    setRequestProperty("X-API-Key", apiKey)
+                    setRequestProperty("User-Agent", "EVCompanion/${BuildConfig.VERSION_NAME} (Android Auto)")
                 }
-
                 try {
                     if (conn.responseCode != 200) throw java.io.IOException("HTTP ${conn.responseCode}")
                     val response = conn.inputStream.bufferedReader().use { it.readText() }
-                    _nearbyChargers.value = parseOverpassJson(response, lat, lon)
+                    val chargers = parseOpenChargeMapJson(response, lat, lon)
+                    _nearbyChargers.value = chargers
+                    failures = 0
+                    DebugFileLogger.i(tag, "Open Charge Map: ${chargers.size} chargers within ${SEARCH_RADIUS_KM}km")
                 } finally {
                     conn.disconnect()
                 }
             } catch (e: Exception) {
-                // Forget the query point so the next location update retries.
                 lastQueriedLat = null
                 lastQueriedLon = null
-                DebugFileLogger.w(tag, "Overpass live query failed (${e.message}), keeping previous chargers")
+                failures++
+                val waitMillis = (60_000L shl (failures - 1).coerceAtMost(4)).coerceAtMost(15 * 60_000L)
+                retryAfterMillis = System.currentTimeMillis() + waitMillis
+                DebugFileLogger.w(tag, "Charger lookup failed (${e.message}), keeping previous chargers, retry in ${waitMillis / 1000}s")
             }
         }
     }
 
     companion object {
-        internal fun parseOverpassJson(jsonString: String, userLat: Double, userLon: Double): List<EvCharger> {
+        private const val SEARCH_RADIUS_KM = 40
+        private const val MAX_RESULTS = 60 // enough to still find fast chargers when the low-SoC filter kicks in
+
+        /** Open Charge Map /v3/poi response -> chargers, nearest first. Malformed entries are skipped. */
+        internal fun parseOpenChargeMapJson(jsonString: String, userLat: Double, userLon: Double): List<EvCharger> {
             val list = mutableListOf<EvCharger>()
             try {
-                val root = JSONObject(jsonString)
-                val elements = root.optJSONArray("elements") ?: return emptyList()
-                for (i in 0 until elements.length()) {
-                    val elem = elements.getJSONObject(i)
-                    val id = elem.optString("id", "osm_$i")
-                    val lat = elem.optDouble("lat", userLat)
-                    val lon = elem.optDouble("lon", userLon)
-                    val tags = elem.optJSONObject("tags")
+                val pois = org.json.JSONArray(jsonString)
+                for (i in 0 until pois.length()) {
+                    val poi = pois.optJSONObject(i) ?: continue
+                    val info = poi.optJSONObject("AddressInfo") ?: continue
+                    if (!info.has("Latitude") || !info.has("Longitude")) continue
+                    val lat = info.optDouble("Latitude")
+                    val lon = info.optDouble("Longitude")
+                    fun JSONObject.text(key: String): String? = optString(key).takeIf { it.isNotBlank() && it != "null" }
 
-                    // optString returns "" for a missing key, so blank -> null before any ?: fallback.
-                    fun tag(key: String): String? = tags?.optString(key)?.takeIf { it.isNotBlank() }
-                    var name = tag("name")
-                    val operator = tag("operator") ?: tag("brand")
-                    val street = tag("addr:street")
-                    val city = tag("addr:city")
-
-                    val address = when {
-                        !street.isNullOrBlank() && !city.isNullOrBlank() -> "$street, $city"
-                        !street.isNullOrBlank() -> street
-                        !city.isNullOrBlank() -> city
-                        else -> ""
+                    val operator = poi.optJSONObject("OperatorInfo")?.text("Title")
+                    val connections = poi.optJSONArray("Connections")
+                    var maxPower = 0.0
+                    var plugs = 0
+                    for (c in 0 until (connections?.length() ?: 0)) {
+                        val conn = connections?.optJSONObject(c) ?: continue
+                        maxPower = maxOf(maxPower, conn.optDouble("PowerKW", 0.0).takeUnless { it.isNaN() } ?: 0.0)
+                        plugs += conn.optInt("Quantity", 1).coerceAtLeast(1)
                     }
-
-                    // 0 = unknown: shown as "?kW" and excluded from the low-SoC fast filter, rather than
-                    // guessing from the brand (most ChargePoint/Tesla destination sites are Level 2).
-                    val maxPower = listOf("socket:type2_combo:output", "socket:tesla_supercharger:output", "charging_station:output", "max_power")
-                        .firstNotNullOfOrNull { key -> tag(key)?.let(::parseKw) } ?: 0
-
-                    if (name.isNullOrBlank()) {
-                        name = operator ?: "EV Charger"
-                    }
-
-                    val capacity = tag("capacity")?.toIntOrNull() ?: 0
-                    val dist = calculateDistanceMiles(userLat, userLon, lat, lon)
+                    val address = listOfNotNull(info.text("AddressLine1"), info.text("Town")).joinToString(", ")
 
                     list.add(
                         EvCharger(
-                            id = id,
-                            name = name,
+                            id = poi.optString("ID", "ocm_$i"),
+                            name = info.text("Title") ?: operator ?: "EV Charger",
                             address = address,
                             latitude = lat,
                             longitude = lon,
-                            maxPowerKw = maxPower,
-                            plugCount = capacity,
+                            // 0 = unknown: shown as "?kW" and excluded from the low-SoC fast filter.
+                            maxPowerKw = maxPower.toInt(),
+                            plugCount = poi.optInt("NumberOfPoints", 0).takeIf { it > 0 } ?: plugs,
                             network = operator,
-                            distanceMiles = dist
-                        )
+                            distanceMiles = calculateDistanceMiles(userLat, userLon, lat, lon),
+                        ),
                     )
                 }
             } catch (e: Exception) {
@@ -155,11 +166,6 @@ class EvChargerRepository(
             }
             return list.sortedBy { it.distanceMiles ?: Double.MAX_VALUE }
         }
-
-        /** "150 kW", "150", "22 kW;50 kW" (takes the max) -> kW, or null when unparseable/0. */
-        internal fun parseKw(raw: String): Int? =
-            Regex("""(\d+(?:\.\d+)?)""").findAll(raw).mapNotNull { it.value.toDoubleOrNull() }
-                .maxOrNull()?.toInt()?.takeIf { it > 0 }
 
         /**
          * Calculates great-circle distance between two points in miles using pure Kotlin Haversine.

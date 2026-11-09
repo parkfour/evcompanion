@@ -69,4 +69,18 @@ class DtcParserTest {
         assertEquals("P0123", codes[0].code)
         assertEquals("U0100", codes[1].code)
     }
+
+    @Test
+    fun `parseStandardObdDtc reads five clean ECU replies as no codes, not C0300`() {
+        // Real Ioniq 5 reply to 03 on 7DF (2026-11-04): 4300 from five ECUs, joined.
+        val payload = ByteArray(10) { if (it % 2 == 0) 0x43.toByte() else 0x00 }
+        assertTrue(DtcParser.parseStandardObdDtc(payload).isEmpty())
+    }
+
+    @Test
+    fun `parseStandardObdDtc reads codes from each ECU record`() {
+        // ECU 1: none; ECU 2: one code P0123; ECU 3: none
+        val payload = byteArrayOf(0x43, 0x00, 0x43, 0x01, 0x01, 0x23, 0x43, 0x00)
+        assertEquals(listOf("P0123"), DtcParser.parseStandardObdDtc(payload).map { it.code })
+    }
 }

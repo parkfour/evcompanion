@@ -1,0 +1,36 @@
+{
+  "name": "Hyundai IONIQ 5 (E-GMP)",
+  "notes": "Vehicle profile: everything car-specific beyond the PID formulas (preset CSV) and the layout (dashboard JSON). Role names match preset rows by substring, first match wins.",
+  "roles": {
+    "speed": ["Real Vehicle Speed", "Vehicle Speed"],
+    "odometer": ["002_Odometer", "Odometer"],
+    "packPower": ["Battery Power"],
+    "packCurrent": ["Battery Current"],
+    "energyDischarged": ["Cumulative Energy Discharged"],
+    "energyCharged": ["Cumulative Energy Charged"],
+    "motorSpeeds": ["Drive Motor Speed Front", "Drive Motor Speed Rear"]
+  },
+  "packCurrentPositiveIsDischarge": true,
+  "charging": { "minChargeCurrentAmps": 1.5, "maxMotorRpm": 50, "holdSeconds": 30 },
+  "chargerLimits": {
+    "maxDcKw": 235,
+    "maxAcKw": 10.9,
+    "networks": [
+      { "match": "Tesla-only", "exclude": true },
+      { "match": "Tesla", "maxKw": 96 }
+    ]
+  },
+  "ecus": [
+    { "header": "7E4", "name": "BMS (Battery)", "minIntervalMs": 100,
+      "pidIntervalsMs": { "220105": 5000, "220102": 3000, "220103": 3000, "220104": 3000, "22010A": 3000, "22010B": 3000, "22010C": 3000 } },
+    { "header": "7E2", "name": "MCU (Motor/Inverter)", "minIntervalMs": 100 },
+    { "header": "7E5", "name": "VCU (Vehicle Control)" },
+    { "header": "7D1", "name": "ICCU (Charger/LDC)" },
+    { "header": "7A4", "name": "IEB (Brakes)" },
+    { "header": "7B3", "name": "FATC (Climate)", "minIntervalMs": 8000 },
+    { "header": "770", "name": "BCM (Body Control)", "minIntervalMs": 1500, "receiveFilter": "778" },
+    { "header": "7C6", "name": "IBU (Integrated Body)", "minIntervalMs": 1500 },
+    { "header": "7A0", "name": "TPMS (Tires)", "minIntervalMs": 25000 },
+    { "header": "730", "name": "CLU (Cluster)", "minIntervalMs": 30000 }
+  ]
+}

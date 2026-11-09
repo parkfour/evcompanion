@@ -13,6 +13,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
+import com.evcompanion.core.units.Units.inUnits
 import com.evcompanion.phone.viewmodel.MainViewModel
 
 /**
@@ -26,6 +27,7 @@ fun LiveDataListScreen(viewModel: MainViewModel) {
     val presets by viewModel.presets.collectAsState()
     val activeId by viewModel.activePresetId.collectAsState()
     val values by viewModel.values.collectAsState()
+    val unitSystem by viewModel.unitSystem.collectAsState()
     val activePreset = presets.firstOrNull { it.id == activeId }
 
     DisposableEffect(activePreset?.id) {
@@ -46,7 +48,7 @@ fun LiveDataListScreen(viewModel: MainViewModel) {
                 items(categoryValues) { v ->
                     ListItem(
                         headlineContent = { Text(v.displayName) },
-                        trailingContent = { Text("${"%.2f".format(v.value)} ${v.unit}") },
+                        trailingContent = { val shown = v.inUnits(unitSystem); Text("${"%.2f".format(shown.value)} ${shown.unit}") },
                     )
                 }
             }

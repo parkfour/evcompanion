@@ -57,9 +57,35 @@ object DtcParser {
         val sid = bytes[0].toInt() and 0xFF
         if (sid != 0x43 && sid != 0x47) return emptyList()
 
-        val results = mutableListOf<DtcCode>()
+        // A broadcast (7DF) query on CAN gets one "[sid] [count] [codes...]" record per ECU, joined
+        // together - e.g. five ECUs with nothing stored send 43 00 43 00 43 00 43 00 43 00. Read
+        // each record by its count; reading them as one flat payload turned every later "43 00"
+        // into a phantom C0300.
+        splitCanRecords(bytes, sid)?.let { records ->
+            return records.flatMap { decodePairs(it, 0, header, ecuName) }
+        }
+
         // If (bytes.size - 1) is odd, offset 1 is the DTC count byte. If even, DTCs start at offset 1.
         val startOffset = if ((bytes.size - 1) % 2 != 0) 2 else 1
+        return decodePairs(bytes, startOffset, header, ecuName)
+    }
+
+    /** The DTC bytes of each ECU's CAN record, or null when [bytes] isn't exactly a run of them. */
+    private fun splitCanRecords(bytes: ByteArray, sid: Int): List<ByteArray>? {
+        val records = mutableListOf<ByteArray>()
+        var offset = 0
+        while (offset < bytes.size) {
+            if (offset + 1 >= bytes.size || (bytes[offset].toInt() and 0xFF) != sid) return null
+            val end = offset + 2 + (bytes[offset + 1].toInt() and 0xFF) * 2
+            if (end > bytes.size) return null
+            records.add(bytes.copyOfRange(offset + 2, end))
+            offset = end
+        }
+        return records
+    }
+
+    private fun decodePairs(bytes: ByteArray, startOffset: Int, header: String?, ecuName: String?): List<DtcCode> {
+        val results = mutableListOf<DtcCode>()
         var offset = startOffset
         while (offset + 1 < bytes.size) {
             val byte1 = bytes[offset].toInt() and 0xFF

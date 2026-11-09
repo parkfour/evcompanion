@@ -73,4 +73,18 @@ class TripEfficiencyTrackerTest {
         // 60 / 15 = 4.0 mi/kWh
         assertEquals(4.0, snap.instantMiPerKwh!!, 0.01)
     }
+
+    @Test
+    fun `energy charged at a standstill is left out of the trip`() {
+        val tracker = TripEfficiencyTracker()
+        tracker.update(60.0, 15.0, 100.0, 10.0, 1000.0)
+        // Drive 10 mi using 3 kWh, then stop and DC fast charge 50 kWh, then drive 10 more mi using 3 kWh.
+        tracker.update(60.0, 15.0, 103.0, 10.0, 1010.0)
+        tracker.update(0.0, -120.0, 103.0, 35.0, 1010.0)
+        tracker.update(0.0, -120.0, 103.0, 60.0, 1010.0)
+        val snap = tracker.update(60.0, 15.0, 106.0, 60.0, 1020.0)
+
+        assertEquals(6.0, snap.tripNetKwh!!, 0.001)
+        assertEquals(20.0 / 6.0, snap.tripAverageMiPerKwh!!, 0.001)
+    }
 }
