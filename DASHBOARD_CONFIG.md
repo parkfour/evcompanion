@@ -68,7 +68,8 @@ Two tile ids get a special hero: `nearby_chargers` shows the nearby-charger list
 whole big slot, and `state_of_charge` shows the SoC dial above a shorter charger list.
 `motor_rpm` with three values (front RPM, rear RPM, pedal %) shows the pedal dial on the left
 and the RPM readouts on the right (rear only on a rear-drive car). As a normal tile it shows a
-bar under the pedal %. As a normal tile, `nearby_chargers` shows just the nearest charger with
+bar under the pedal %. The dial and bar take their colors from the tile's `gaugeColorRules`
+(applied to the pedal %), or the theme's scale if it has none. As a normal tile, `nearby_chargers` shows just the nearest charger with
 its max rate and a NAV button.
 
 ### Color rules (`gaugeColorRules`, `backgroundColorRules`)

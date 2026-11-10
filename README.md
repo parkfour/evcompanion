@@ -242,7 +242,7 @@ so older Android Auto hosts can't run it). The trade-offs:
 
 ## Status
 
-Version 0.13.5. Actively developed for one vehicle and a small group of testers on Google Play
+Version 0.13.6. Actively developed for one vehicle and a small group of testers on Google Play
 internal testing: 0.13.x as `com.parkfour.evcompanion.xyzzy`, alongside 0.12.25 on the original
 `com.parkfour.evcompanion` (the two install side by side). Also built as a sideload APK for the
 phone and the Desktop Head Unit. Not yet submitted to Google Play for public distribution.
