@@ -118,6 +118,14 @@
             { "pidNames": ["Accelerator Pedal Position", "Accel Pedal"], "sublabel": "ACCEL" }
           ],
           "gaugeRange": [-10100, 10100],
+          "gaugeColorRules": {
+            "rules": [
+              { "compare": "lt", "threshold": 10, "color": "#28A0DC" },
+              { "compare": "lt", "threshold": 50, "color": "#3CC864" },
+              { "compare": "lt", "threshold": 75, "color": "#E6B428" }
+            ],
+            "default": "#DC3C3C"
+          },
           "hero": { "type": "dial" },
           "detail": "motor_rpm_detail"
         }

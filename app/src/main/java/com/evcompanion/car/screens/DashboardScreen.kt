@@ -35,6 +35,7 @@ import com.evcompanion.car.screens.dashboard.GraphHistoryTracker
 import com.evcompanion.car.screens.dashboard.LineChartDrawing
 import com.evcompanion.car.screens.dashboard.MotorDriveTypeTracker
 import com.evcompanion.core.dashboard.DashboardConfig
+import com.evcompanion.core.dashboard.ColorRules
 import com.evcompanion.core.debug.DebugFileLogger
 import com.evcompanion.core.dashboard.DetailPanelDef
 import com.evcompanion.core.dashboard.DetailPanelType
@@ -1190,7 +1191,7 @@ class DashboardScreen(carContext: CarContext, private val container: AppContaine
             canvas, left.exactCenterX(), left.exactCenterY(), minOf(left.width(), left.height()) * 0.40f, fraction,
             valueText = formatGaugeValue(pedal, tile.showUnits, 0),
             label = accel.sublabel ?: "ACCEL",
-            ringColor = { frac -> activeTheme.resolveGaugeColor(frac) },
+            ringColor = { frac -> tile.gaugeColorRules?.resolve(pedal?.value, latestValues) ?: activeTheme.resolveGaugeColor(frac) },
             theme = activeTheme,
         )
 
@@ -1328,13 +1329,13 @@ class DashboardScreen(carContext: CarContext, private val container: AppContaine
                 alpha = alpha,
             )
             if (tile.id.startsWith("motor_rpm") && sub.pidNames.any { it.contains("Accel", ignoreCase = true) }) {
-                drawPedalBar(canvas, cell.rect, sub.resolve(latestValues)?.value)
+                drawPedalBar(canvas, cell.rect, sub.resolve(latestValues)?.value, tile.gaugeColorRules)
             }
         }
     }
 
     /** Thin horizontal bar along the bottom of the ACCEL cell - pedal % at a glance. */
-    private fun drawPedalBar(canvas: Canvas, cell: Rect, percent: Double?) {
+    private fun drawPedalBar(canvas: Canvas, cell: Rect, percent: Double?, rules: ColorRules?) {
         val frac = ((percent ?: 0.0) / 100.0).coerceIn(0.0, 1.0)
         val barH = (cell.height() * 0.08f).coerceIn(5f, 12f)
         val bottom = cell.bottom - cell.height() * 0.06f
@@ -1342,7 +1343,7 @@ class DashboardScreen(carContext: CarContext, private val container: AppContaine
         val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = activeTheme.gaugeTrackColor }
         canvas.drawRoundRect(track, barH / 2f, barH / 2f, paint)
         if (frac <= 0.0) return
-        paint.color = activeTheme.resolveGaugeColor(frac)
+        paint.color = rules?.resolve(percent, latestValues) ?: activeTheme.resolveGaugeColor(frac)
         val fill = RectF(track.left, track.top, track.left + (track.width() * frac).toFloat().coerceAtLeast(barH), track.bottom)
         canvas.drawRoundRect(fill, barH / 2f, barH / 2f, paint)
     }
