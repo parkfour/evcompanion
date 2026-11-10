@@ -181,8 +181,8 @@ object GaugeDrawing {
     /** A readout's unit ("kW") is drawn at this fraction of the number's size... */
     private const val UNIT_SCALE = 0.45f
     /** ...and each half of a fraction unit ("mi" over "kWh") at this fraction. */
-    private const val FRACTION_SCALE = 0.36f
-    private const val UNIT_GAP = 0.1f
+    private const val FRACTION_SCALE = 0.32f
+    private const val UNIT_GAP = 0.06f
 
     /** "3.4 mi/kWh" -> ("3.4", "mi/kWh"); a value with no unit -> (value, ""). */
     fun splitUnit(valueText: String): Pair<String, String> {

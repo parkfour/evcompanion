@@ -2,9 +2,10 @@
 
 An Android app that reads live data from an EV over its OBD-II port (via a
 Bluetooth ELM327-style adapter) and renders a custom, hand-drawn dashboard on
-the car's own screen through Android Auto - state of charge, pack voltage/current,
-cell voltages, pack/cabin temperatures, 12V battery, motor RPM, lights, and more,
-laid out from a JSON config rather than hardcoded per-screen.
+the car's own screen through Android Auto - state of charge, trip and instant efficiency,
+pack voltage/current, cell voltages, pack/cabin/tire temperatures, 12V battery, motor RPM and
+pedal, lights, nearby DC chargers with one-tap navigation, and more, laid out from a JSON config
+rather than hardcoded per-screen. Imperial or metric units, chosen in the phone app.
 
 Built and tested against a Hyundai IONIQ 5 (AWD, 77.4 kWh pack). A `generic_ev.csv`
 preset ships alongside the IONIQ 5-specific one, but PID coverage and formulas for
@@ -16,7 +17,7 @@ Android Auto (Desktop Head Unit at a wide car-screen size, replaying a recorded 
 The left card belongs to Android Auto and shows the promoted tile's name, value and actions; the
 hero is drawn under it and the rest of the page fills the right. Google Maps keeps its own card.
 
-![Drive page: Efficiency promoted to the hero, four tiles on the right](docs/screenshots/aa-poi-drive.png)
+![Drive page: nearby chargers in the hero; SoC, efficiency, pack and motors/pedal tiles on the right](docs/screenshots/aa-poi-drive.png)
 
 ![Diagnostics page: the card offers Scan; odometer, battery health and lifetime totals on the right](docs/screenshots/aa-poi-diagnostics.png)
 
@@ -53,7 +54,14 @@ Phone app:
   driver's side with the promoted tile's name, value and up to two buttons (Full
   screen, Scan/Clear codes, Nearest charger); the app draws the big "hero" tile under
   that card and the rest of the page's tiles to its right. Tap any tile to promote it;
-  Full screen opens a detail graph view.
+  Full screen opens a detail graph view. The app switches to the Charging page by itself
+  when the car starts charging.
+- **Nearby chargers** (`core.poi`) - fetched from [Open Charge Map](https://openchargemap.org)
+  around the phone's location, worldwide. Below the vehicle profile's low-SoC threshold the
+  list keeps only DC fast chargers; chargers the car can't use (e.g. Tesla-only sites for a
+  non-Tesla) are hidden and rates are capped at what the car accepts. NAV hands the charger to
+  your navigation app. Listings are crowd-sourced, so names and kW ratings are sometimes wrong;
+  corrections go to openchargemap.org.
 
 ## Using it
 
@@ -123,14 +131,21 @@ keyPassword=...
 Without that file, release builds fall back to the debug key, which is fine
 locally but can't be uploaded to Play.
 
-Debug builds use the application ID `com.parkfour.evcompanion.debug` and the name
-"EV Companion (Debug)", so they install beside the Play version instead of replacing it
-(the two are signed with different keys, so one can't update the other).
+The charger list needs an Open Charge Map API key (free at openchargemap.org): put
+`OCM_API_KEY=...` in the gitignored `local.properties`, or set the `OCM_API_KEY` environment
+variable (CI reads a secret of that name). Without it the app builds and runs, with the charger
+list disabled.
+
+**Application ID.** Release builds currently use `com.parkfour.evcompanion.xyzzy`, the Play app
+the 0.13 testers install. It is a stand-in: the original `com.parkfour.evcompanion` Play app
+stays on 0.12.25 for its testers, and the final ID is still to be chosen. Debug builds add
+`.debug` (name "EV Companion (Debug)"), so they install beside the Play version instead of
+replacing it (the two are signed with different keys, so one can't update the other).
 
 ### Sideload APK
 
 `./gradlew :app:assembleSideload` builds a release APK for direct download, installed as its own
-app (`com.parkfour.evcompanion.sideload`, "EV Companion (Sideload)") beside the Play and debug
+app (release ID + `.sideload`, "EV Companion (Sideload)") beside the Play and debug
 builds. It is signed with a dedicated sideload key, never the Play upload key, read from the
 environment: `SIDELOAD_KEYSTORE_FILE`, `SIDELOAD_KEY_ALIAS`, `SIDELOAD_STORE_PASSWORD` and
 `SIDELOAD_KEY_PASSWORD` (without them it falls back to the debug key).
@@ -143,13 +158,14 @@ CI builds it in two places once the secrets below are set on that server:
 - **GitHub mirror:** each version tag attaches `evcompanion-<tag>.apk` to that tag's release.
 
 The secrets, set separately on each server: `SIDELOAD_KEYSTORE_B64` (the keystore,
-base64-encoded), `SIDELOAD_KEY_ALIAS`, `SIDELOAD_STORE_PASSWORD` and `SIDELOAD_KEY_PASSWORD`. Every release must be signed with the
+base64-encoded), `SIDELOAD_KEY_ALIAS`, `SIDELOAD_STORE_PASSWORD` and `SIDELOAD_KEY_PASSWORD`,
+plus `OCM_API_KEY` for the charger list. Every release must be signed with the
 same key, or testers can't install an update over their current copy, so back the key up.
 
-Since 0.13.0 the app is a POI-category app, and Android Auto shows sideloaded POI apps in
-cars (seen with a sibling Park Four app), so this APK is meant to work in a car as well as on the
-phone and in the Desktop Head Unit. The first car check of the POI sideload build is still to
-be done; until then the Play track is the proven route into a car.
+**The sideload APK does not appear in a car.** Android Auto on the phone rejects every app not
+installed from Play (`CAR.VALIDATOR: Package DENIED` in logcat), whatever its category, even
+with "Unknown sources" on. The APK is for the phone app and the Desktop Head Unit; in a car,
+install from the Play testing track.
 
 ### Testing Android Auto without a car
 
@@ -198,8 +214,8 @@ so older Android Auto hosts can't run it). The trade-offs:
 - The card's height isn't reported to the app, so the hero's position under it uses heights
   measured in the Desktop Head Unit and may need adjusting on some screens.
 - Google Maps keeps its card, and the app no longer competes for navigation requests.
-- Android Auto shows sideloaded POI apps in cars (seen with a sibling Park Four app), so builds
-  can be distributed outside Play. This app's first car check as a POI build is still to come.
+- The POI build works in a car when installed from Play (first checked 2026-11-04). Sideloaded
+  builds still don't show up there; see "Sideload APK".
 
 ## Other known limitations
 
@@ -219,16 +235,17 @@ so older Android Auto hosts can't run it). The trade-offs:
   screen - but this is a workaround for an observed host behavior, not a
   guaranteed-universal one.
 - **Multi-vehicle support is basic.** Only two bundled presets exist; other cars
-  need a user-imported PID CSV and dashboard JSON.
+  need a user-imported PID CSV, dashboard JSON and vehicle profile.
 - **Requires an ELM327-compatible Bluetooth OBD-II adapter** (classic or BLE).
   BLE support covers the common GATT layouts (Vgate iCar Pro, FFF0/FFE0 clones);
   others fall back to a generic characteristic scan, which usually but not always works.
 
 ## Status
 
-Version 0.13.4. Actively developed for one vehicle and a small group of testers, distributed
-through a Google Play testing track and as a sideload APK (see "Sideload APK"). Not yet
-submitted to Google Play for public distribution.
+Version 0.13.5. Actively developed for one vehicle and a small group of testers on Google Play
+internal testing: 0.13.x as `com.parkfour.evcompanion.xyzzy`, alongside 0.12.25 on the original
+`com.parkfour.evcompanion` (the two install side by side). Also built as a sideload APK for the
+phone and the Desktop Head Unit. Not yet submitted to Google Play for public distribution.
 
 ## Privacy
 

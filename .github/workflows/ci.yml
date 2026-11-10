@@ -111,6 +111,8 @@ jobs:
           SIDELOAD_KEY_ALIAS: ${{ secrets.SIDELOAD_KEY_ALIAS }}
           SIDELOAD_STORE_PASSWORD: ${{ secrets.SIDELOAD_STORE_PASSWORD }}
           SIDELOAD_KEY_PASSWORD: ${{ secrets.SIDELOAD_KEY_PASSWORD }}
+          # Open Charge Map key for the nearby-charger list; unset = list disabled in this build.
+          OCM_API_KEY: ${{ secrets.OCM_API_KEY }}
         run: |
           if [ -z "$SIDELOAD_KEYSTORE_B64" ] || [ -z "$SIDELOAD_STORE_PASSWORD" ]; then
             echo "Sideload signing secrets not set; skipping"

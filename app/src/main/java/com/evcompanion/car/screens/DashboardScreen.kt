@@ -334,6 +334,11 @@ class DashboardScreen(carContext: CarContext, private val container: AppContaine
                 DebugFileLogger.i(TAG, "onClick -> no-op (slot=$slot >= secondaryCount=$secondaryCount)")
                 return
             }
+            val navHit = nearestChargerNavHit
+            if (tiles[order[slot + 1]].id == "nearby_chargers" && navHit != null && navHit.first.contains(x.toInt(), y.toInt())) {
+                navigateToCharger(navHit.second)
+                return
+            }
             DebugFileLogger.i(TAG, "onClick -> promoteAt(slot=$slot)")
             promoteAt(order, slot)
             invalidate()
@@ -840,8 +845,8 @@ class DashboardScreen(carContext: CarContext, private val container: AppContaine
         val gridWidth = (gridRight - gridLeft).coerceAtLeast(1)
 
         val cols = ((secondaryCount + 1) / 2).coerceAtLeast(1)
-        val gapX = (gridWidth * 0.02f).toInt().coerceAtLeast(4)
-        val gapY = (area.height() * 0.03f).toInt().coerceAtLeast(4)
+        val gapX = (gridWidth * 0.01f).toInt().coerceAtLeast(4)
+        val gapY = (area.height() * 0.015f).toInt().coerceAtLeast(4)
         val cardW = ((gridWidth - (cols - 1) * gapX) / cols).coerceAtLeast(2)
         val cardH = ((area.height() - gapY) / 2).coerceAtLeast(2)
         return PageLayout(bigRect, gridLeft, area.top, cardW, cardH, gapX, gapY, cols)
@@ -1232,6 +1237,10 @@ class DashboardScreen(carContext: CarContext, private val container: AppContaine
             drawLightsIndicator(canvas, rect, tile)
             return
         }
+        if (tile.id == "nearby_chargers" && !big) {
+            drawNearestChargerTile(canvas, rect, tile)
+            return
+        }
         if (tile.id == "motor_rpm" && motorDriveType == MotorDriveType.RWD_ONLY && tile.values.size > 2) {
             // Combined motors + pedal tile: drop the front cell, keep the rest as a normal grid.
             drawTileContent(canvas, rect, tile.copy(id = "motor_rpm_rwd", values = tile.values.drop(1)), big)
@@ -1295,9 +1304,11 @@ class DashboardScreen(carContext: CarContext, private val container: AppContaine
         }
         // One number size for the whole tile - the smallest any cell needs to fit - so the numbers
         // line up instead of each cell shrinking on its own to make room for its unit.
-        val fitted = cells.indices.minOfOrNull { i ->
+        // Words like REGEN fit their own cell (drawReadout shrinks them) - letting them set the
+        // shared size would shrink every number, and the ratchet below would keep it shrunk.
+        val fitted = cells.indices.filter { texts[it].firstOrNull()?.isLetter() != true }.minOfOrNull { i ->
             val base = (cells[i].rect.height() * (if (big) 0.34f else 0.42f)).coerceIn(10f, 60f)
-            GaugeDrawing.fitReadoutSize(base, texts[i], cells[i].rect.width() * 0.9f, activeTheme)
+            GaugeDrawing.fitReadoutSize(base, texts[i], cells[i].rect.width() * 0.98f, activeTheme)
         } ?: 10f
         // Only ever shrink while the slot stays the same size - otherwise "9.9" -> "10.2" -> "9.8"
         // makes the whole tile pulse as the extra digit comes and goes.
@@ -1312,11 +1323,136 @@ class DashboardScreen(carContext: CarContext, private val container: AppContaine
             GaugeDrawing.drawReadout(
                 canvas, cell.cx, cell.cy, cellTextSize, sub.sublabel ?: "",
                 formatted,
-                maxWidth = cell.rect.width() * 0.9f,
+                maxWidth = cell.rect.width() * 0.98f,
                 theme = activeTheme,
                 alpha = alpha,
             )
+            if (tile.id.startsWith("motor_rpm") && sub.pidNames.any { it.contains("Accel", ignoreCase = true) }) {
+                drawPedalBar(canvas, cell.rect, sub.resolve(latestValues)?.value)
+            }
         }
+    }
+
+    /** Thin horizontal bar along the bottom of the ACCEL cell - pedal % at a glance. */
+    private fun drawPedalBar(canvas: Canvas, cell: Rect, percent: Double?) {
+        val frac = ((percent ?: 0.0) / 100.0).coerceIn(0.0, 1.0)
+        val barH = (cell.height() * 0.08f).coerceIn(5f, 12f)
+        val bottom = cell.bottom - cell.height() * 0.06f
+        val track = RectF(cell.left + cell.width() * 0.1f, bottom - barH, cell.right - cell.width() * 0.1f, bottom)
+        val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = activeTheme.gaugeTrackColor }
+        canvas.drawRoundRect(track, barH / 2f, barH / 2f, paint)
+        if (frac <= 0.0) return
+        paint.color = activeTheme.resolveGaugeColor(frac)
+        val fill = RectF(track.left, track.top, track.left + (track.width() * frac).toFloat().coerceAtLeast(barH), track.bottom)
+        canvas.drawRoundRect(fill, barH / 2f, barH / 2f, paint)
+    }
+
+    /** Where the small chargers tile drew its NAV button, so a tap there navigates instead of promoting. */
+    private var nearestChargerNavHit: Pair<Rect, EvCharger>? = null
+
+    /**
+     * The chargers tile when it is NOT the hero: just the nearest charger (same filter as the
+     * hero's list) with its max rate and a NAV button - no second SoC dial beside the SoC tile.
+     */
+    private fun drawNearestChargerTile(canvas: Canvas, rect: Rect, tile: TileDef) {
+        nearestChargerNavHit = null
+        val w = rect.width().toFloat()
+        val h = rect.height().toFloat()
+        val pad = w * 0.07f
+        val headingSize = (h * 0.13f).coerceAtMost(w * 0.08f)
+        val headingPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = activeTheme.headingColor
+            textAlign = Paint.Align.CENTER
+            textSize = headingSize
+            typeface = activeTheme.labelTypeface
+        }
+        canvas.drawText(tile.label, rect.exactCenterX(), rect.top + headingSize * 1.4f, headingPaint)
+
+        val soc = tile.values.firstOrNull()?.resolve(latestValues)?.value
+        val charger = EvChargerRepository.filterChargers(
+            chargers = chargersForThisCar(),
+            currentSocPercent = soc,
+            socThresholdPercent = socFastChargeThresholdPercent,
+            minPowerKw = minFastChargePowerKw,
+            limit = 1,
+        ).chargers.firstOrNull()
+        val textW = w - 2 * pad
+        if (charger == null) {
+            val p = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                color = activeTheme.textSecondaryColor
+                textAlign = Paint.Align.CENTER
+                textSize = (h * 0.08f).coerceIn(11f, 18f)
+                typeface = activeTheme.labelTypeface
+            }
+            canvas.drawText(ellipsize(p, "Searching...", textW), rect.exactCenterX(), rect.exactCenterY(), p)
+            return
+        }
+
+        // Name on up to two lines, then distance.
+        val namePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = activeTheme.textPrimaryColor
+            textSize = (h * 0.11f).coerceIn(13f, 26f)
+            typeface = Typeface.DEFAULT_BOLD
+        }
+        val words = charger.name.split(' ')
+        var split = words.size
+        while (split > 1 && namePaint.measureText(words.take(split).joinToString(" ")) > textW) split--
+        val line1 = ellipsize(namePaint, words.take(split).joinToString(" "), textW)
+        val line2 = ellipsize(namePaint, words.drop(split).joinToString(" "), textW)
+        var y = rect.top + headingSize * 2f + namePaint.textSize
+        canvas.drawText(line1, rect.left + pad, y, namePaint)
+        if (line2.isNotEmpty()) {
+            y += namePaint.textSize * 1.15f
+            canvas.drawText(line2, rect.left + pad, y, namePaint)
+        }
+        val detailPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = activeTheme.textSecondaryColor
+            textSize = (h * 0.085f).coerceIn(11f, 20f)
+            typeface = activeTheme.labelTypeface
+        }
+        val dist = charger.distanceMiles?.let { val (d, u) = Units.convert(it, "mi", unitSystem); String.format(Locale.US, "%.1f %s", d, u) }
+        if (dist != null) canvas.drawText(ellipsize(detailPaint, dist, textW), rect.left + pad, y + detailPaint.textSize * 1.4f, detailPaint)
+
+        // Bottom row: kW pill | NAV button.
+        val btnH = (h * 0.22f).coerceIn(28f, 60f)
+        val btnBottom = rect.bottom - h * 0.06f
+        val btnTop = btnBottom - btnH
+        val gap = w * 0.04f
+        val half = (textW - gap) / 2f
+        val btnText = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            textSize = (btnH * 0.42f).coerceIn(12f, 24f)
+            typeface = Typeface.DEFAULT_BOLD
+            textAlign = Paint.Align.CENTER
+        }
+        val kwRect = RectF(rect.left + pad, btnTop, rect.left + pad + half, btnBottom)
+        val navRect = RectF(kwRect.right + gap, btnTop, rect.right - pad, btnBottom)
+        val fill = Paint(Paint.ANTI_ALIAS_FLAG)
+        val baseline = kwRect.centerY() - (btnText.descent() + btnText.ascent()) / 2f
+        fill.color = kwPillColor(charger.maxPowerKw)
+        canvas.drawRoundRect(kwRect, 8f, 8f, fill)
+        btnText.color = Color.BLACK
+        val kwText = if (charger.maxPowerKw > 0) "${charger.maxPowerKw}kW" else "?kW"
+        btnText.textSize = minOf(btnText.textSize, btnText.textSize * kwRect.width() * 0.9f / btnText.measureText(kwText))
+        canvas.drawText(kwText, kwRect.centerX(), baseline, btnText)
+        fill.color = activeTheme.textAccentColor
+        canvas.drawRoundRect(navRect, 8f, 8f, fill)
+        btnText.color = Color.WHITE
+        canvas.drawText("NAV ➔", navRect.centerX(), baseline, btnText)
+        nearestChargerNavHit = Rect(navRect.left.toInt(), navRect.top.toInt(), navRect.right.toInt(), navRect.bottom.toInt()) to charger
+    }
+
+    private fun ellipsize(paint: Paint, text: String, maxW: Float): String {
+        if (paint.measureText(text) <= maxW) return text
+        var t = text
+        while (t.isNotEmpty() && paint.measureText("$t…") > maxW) t = t.dropLast(1)
+        return "$t…"
+    }
+
+    private fun kwPillColor(kw: Int): Int = when {
+        kw >= 250 -> Color.rgb(0, 229, 255) // Cyan ultra fast
+        kw >= 150 -> Color.rgb(60, 200, 100) // Fast green
+        kw >= 100 -> Color.rgb(60, 210, 120) // Green
+        else -> Color.rgb(180, 185, 195) // Standard / Level 2 gray
     }
 
     /**
@@ -1679,12 +1815,7 @@ class DashboardScreen(carContext: CarContext, private val container: AppContaine
             val kwBtnLeft = kwBtnRight - kwBtnW
             val kwRectF = RectF(kwBtnLeft, btnTop, kwBtnRight, btnTop + btnH)
 
-            kwBgPaint.color = when {
-                charger.maxPowerKw >= 250 -> Color.rgb(0, 229, 255) // Cyan ultra fast
-                charger.maxPowerKw >= 150 -> Color.rgb(60, 200, 100) // Fast green
-                charger.maxPowerKw >= 100 -> Color.rgb(60, 210, 120) // Green
-                else -> Color.rgb(180, 185, 195) // Standard / Level 2 gray
-            }
+            kwBgPaint.color = kwPillColor(charger.maxPowerKw)
             canvas.drawRoundRect(kwRectF, 8f, 8f, kwBgPaint)
             val kwBaseline = kwRectF.centerY() - (kwTextPaint.descent() + kwTextPaint.ascent()) / 2f
             canvas.drawText(if (charger.maxPowerKw > 0) "${charger.maxPowerKw}kW" else "?kW", kwRectF.centerX(), kwBaseline, kwTextPaint)
@@ -1694,16 +1825,7 @@ class DashboardScreen(carContext: CarContext, private val container: AppContaine
             val maxTextW = kwBtnLeft - textLeft - 6f
 
             // Station Name
-            val rawName = charger.name
-            val nameText = if (namePaint.measureText(rawName) > maxTextW) {
-                var truncated = rawName
-                while (truncated.isNotEmpty() && namePaint.measureText("$truncated…") > maxTextW) {
-                    truncated = truncated.dropLast(1)
-                }
-                "$truncated…"
-            } else {
-                rawName
-            }
+            val nameText = ellipsize(namePaint, charger.name, maxTextW)
             val nameY = rowRectF.top + rowH * 0.42f
             canvas.drawText(nameText, textLeft, nameY, namePaint)
 
