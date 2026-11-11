@@ -136,9 +136,9 @@ The charger list needs an Open Charge Map API key (free at openchargemap.org): p
 variable (CI reads a secret of that name). Without it the app builds and runs, with the charger
 list disabled.
 
-**Application ID.** Release builds currently use `com.parkfour.evcompanion.xyzzy`, the Play app
-the 0.13 testers install. It is a stand-in: the original `com.parkfour.evcompanion` Play app
-stays on 0.12.25 for its testers, and the final ID is still to be chosen. Debug builds add
+**Application ID.** Release builds use `com.parkfour.evcompanion`. (0.13.0 to 0.13.6 were
+tested under a separate Play app, `com.parkfour.evcompanion.xyzzy`; 0.14.0 brought them back to
+the original app, so that stand-in can be uninstalled.) Debug builds add
 `.debug` (name "EV Companion (Debug)"), so they install beside the Play version instead of
 replacing it (the two are signed with different keys, so one can't update the other).
 
@@ -242,9 +242,8 @@ so older Android Auto hosts can't run it). The trade-offs:
 
 ## Status
 
-Version 0.13.6. Actively developed for one vehicle and a small group of testers on Google Play
-internal testing: 0.13.x as `com.parkfour.evcompanion.xyzzy`, alongside 0.12.25 on the original
-`com.parkfour.evcompanion` (the two install side by side). Also built as a sideload APK for the
+Version 0.14.0. Actively developed for one vehicle and a small group of testers on Google Play
+internal testing (`com.parkfour.evcompanion`). Also built as a sideload APK for the
 phone and the Desktop Head Unit. Not yet submitted to Google Play for public distribution.
 
 ## Privacy

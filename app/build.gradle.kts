@@ -27,11 +27,11 @@ android {
     compileSdk = 36
 
     defaultConfig {
-        applicationId = "com.parkfour.evcompanion.xyzzy"
+        applicationId = "com.parkfour.evcompanion"
         minSdk = 26
         targetSdk = 36
-        versionCode = 54
-        versionName = "0.13.6"
+        versionCode = 55
+        versionName = "0.14.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
