@@ -1,6 +1,7 @@
 package com.evcompanion.phone
 
 import android.Manifest
+import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -11,6 +12,8 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.ui.Modifier
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.core.content.ContextCompat
+import com.evcompanion.App
 import com.evcompanion.phone.ui.AppNavGraph
 import com.evcompanion.phone.viewmodel.MainViewModel
 
@@ -22,11 +25,13 @@ class MainActivity : ComponentActivity() {
         ActivityResultContracts.RequestMultiplePermissions()
     ) {
         viewModel.refreshBondedDevices()
+        val container = (application as App).container
         // The provider is created at app start, before the user could have granted location.
-        (application as com.evcompanion.App).container.vehicleLocationProvider.run {
+        container.vehicleLocationProvider.run {
             updateLastKnownLocation()
             startListening()
         }
+        container.reconnectLastDeviceIfPermitted()
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -42,6 +47,8 @@ class MainActivity : ComponentActivity() {
             add(Manifest.permission.ACCESS_FINE_LOCATION)
             add(Manifest.permission.ACCESS_COARSE_LOCATION)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) add(Manifest.permission.POST_NOTIFICATIONS)
+        }.filter {
+            ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
         }
         if (needed.isNotEmpty()) requestPermissions.launch(needed.toTypedArray())
 

@@ -5,6 +5,7 @@ import com.evcompanion.core.bluetooth.BluetoothDeviceRepository
 import com.evcompanion.core.bluetooth.LastObdDeviceRepository
 import com.evcompanion.core.dashboard.DashboardConfigRepository
 import com.evcompanion.core.location.VehicleLocationProvider
+import com.evcompanion.core.obd.ObdConnectionState
 import com.evcompanion.core.obd.ObdTransportFactory
 import com.evcompanion.core.poi.EvChargerRepository
 import com.evcompanion.core.polling.ObdPollingService
@@ -22,7 +23,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
 /** Small hand-rolled DI container - no framework needed for a project this size. */
-class AppContainer(context: Context) {
+class AppContainer(private val context: Context) {
 
     private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
@@ -74,6 +75,12 @@ class AppContainer(context: Context) {
         // Reconnect to whatever adapter last actually worked, so the driver doesn't have to
         // re-pick it from the Connect screen every drive. The Connect screen still lets them stop
         // this (or any) attempt and pick a different device - see PollingEngine.disconnect.
+        reconnectLastDeviceIfPermitted()
+    }
+
+    fun reconnectLastDeviceIfPermitted() {
+        if (!ObdPollingService.hasBluetoothPermission(context)) return
+        if (pollingEngine.connectionState.value !is ObdConnectionState.Disconnected) return
         appScope.launch {
             lastObdDeviceRepository.lastDeviceAddress.first()?.let { address ->
                 ObdPollingService.start(context, address)

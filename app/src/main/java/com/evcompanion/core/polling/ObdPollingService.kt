@@ -1,5 +1,6 @@
 package com.evcompanion.core.polling
 
+import android.Manifest
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -7,11 +8,14 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
+import androidx.core.content.ContextCompat
 import com.evcompanion.App
+import com.evcompanion.core.debug.DebugFileLogger
 import com.evcompanion.phone.MainActivity
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -35,7 +39,13 @@ class ObdPollingService : Service() {
         when (intent?.action) {
             ACTION_CONNECT -> {
                 val address = intent.getStringExtra(EXTRA_DEVICE_ADDRESS) ?: return START_NOT_STICKY
-                startForegroundWithNotification()
+                try {
+                    startForegroundWithNotification()
+                } catch (e: SecurityException) {
+                    DebugFileLogger.e(TAG, "SecurityException starting foreground service: ${e.message}")
+                    stopSelf()
+                    return START_NOT_STICKY
+                }
                 (application as App).container.pollingEngine.connectAsync(address)
             }
             ACTION_DISCONNECT -> {
@@ -82,13 +92,29 @@ class ObdPollingService : Service() {
     }
 
     companion object {
+        private const val TAG = "ObdPollingService"
         private const val CHANNEL_ID = "obd_connection"
         private const val NOTIFICATION_ID = 1
         private const val ACTION_CONNECT = "com.evcompanion.action.CONNECT"
         private const val ACTION_DISCONNECT = "com.evcompanion.action.DISCONNECT"
         private const val EXTRA_DEVICE_ADDRESS = "device_address"
 
+        fun hasBluetoothPermission(context: Context): Boolean {
+            return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                ContextCompat.checkSelfPermission(
+                    context,
+                    Manifest.permission.BLUETOOTH_CONNECT
+                ) == PackageManager.PERMISSION_GRANTED
+            } else {
+                true
+            }
+        }
+
         fun start(context: Context, deviceAddress: String) {
+            if (!hasBluetoothPermission(context)) {
+                DebugFileLogger.w(TAG, "Cannot start ObdPollingService: BLUETOOTH_CONNECT permission not granted yet")
+                return
+            }
             val intent = Intent(context, ObdPollingService::class.java)
                 .setAction(ACTION_CONNECT)
                 .putExtra(EXTRA_DEVICE_ADDRESS, deviceAddress)
