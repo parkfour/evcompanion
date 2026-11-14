@@ -30,8 +30,8 @@ android {
         applicationId = "com.parkfour.evcompanion"
         minSdk = 26
         targetSdk = 36
-        versionCode = 55
-        versionName = "0.14.0"
+        versionCode = 56
+        versionName = "0.14.1"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
