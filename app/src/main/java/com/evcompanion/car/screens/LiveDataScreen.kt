@@ -11,7 +11,7 @@ import androidx.car.app.model.Template
 import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.lifecycleScope
-import com.evcompanion.core.units.UnitSystem
+import com.evcompanion.core.units.UnitPreferences
 import com.evcompanion.core.units.Units.inUnits
 import com.evcompanion.AppContainer
 import com.evcompanion.core.polling.DecodedValue
@@ -31,7 +31,7 @@ class LiveDataScreen(
 ) : Screen(carContext) {
 
     private var values: Map<String, DecodedValue> = emptyMap()
-    private var unitSystem = UnitSystem.IMPERIAL
+    private var unitPrefs = UnitPreferences.IMPERIAL
 
     init {
         container.pollingEngine.subscribe(category)
@@ -41,7 +41,7 @@ class LiveDataScreen(
             }
         })
         lifecycleScope.launch {
-            container.dashboardLayoutConfig.unitSystem.collect { unitSystem = it; invalidate() }
+            container.dashboardLayoutConfig.unitPreferences.collect { unitPrefs = it; invalidate() }
         }
         lifecycleScope.launch {
             container.pollingEngine.values.collect {
@@ -62,7 +62,7 @@ class LiveDataScreen(
             listBuilder.addItem(
                 Row.Builder()
                     .setTitle(v.displayName)
-                    .addText(v.inUnits(unitSystem).let { "%.2f %s".format(it.value, it.unit) })
+                    .addText(v.inUnits(unitPrefs).let { "%.2f %s".format(it.value, it.unit) })
                     .build()
             )
         }

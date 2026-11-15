@@ -44,6 +44,15 @@
           { "pidNames": ["Battery Min Temperature"], "label": "MIN TEMP", "color": "#E05AE0" }
         ] }
       ]
+    },
+    "pack_temps_detail": {
+      "label": "Pack Temperatures",
+      "panels": [
+        { "type": "graph", "label": "Last 5 minutes", "windowSeconds": 300, "series": [
+          { "pidNames": ["Battery Min Temperature"], "label": "MIN", "color": "#5AAAFF" },
+          { "pidNames": ["Battery Max Temperature"], "label": "MAX", "color": "#FF825A" }
+        ] }
+      ]
     }
   },
   "pages": [
@@ -218,7 +227,8 @@
               { "pidNames": ["Battery Min Temperature"], "label": "MIN", "color": "#5AAAFF" },
               { "pidNames": ["Battery Max Temperature"], "label": "MAX", "color": "#FF825A" }
             ]
-          }
+          },
+          "detail": "pack_temps_detail"
         },
         {
           "id": "cell_voltages_driving",

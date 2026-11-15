@@ -4,6 +4,8 @@ import android.content.Intent
 import android.provider.OpenableColumns
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -12,7 +14,12 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.ListItem
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
@@ -50,7 +57,8 @@ fun PresetPickerScreen(viewModel: MainViewModel) {
     val presetImportError by viewModel.presetImportError.collectAsState()
     val debugEnabled by viewModel.debugFeaturesEnabled.collectAsState()
     val autoScanDtc by viewModel.autoScanDtcOnHero.collectAsState()
-    val unitSystem by viewModel.unitSystem.collectAsState()
+    val unitPrefs by viewModel.unitPreferences.collectAsState()
+    var unitsExpanded by remember { mutableStateOf(false) }
     val vehicleProfileName by viewModel.vehicleProfileName.collectAsState()
     val vehicleProfileImported by viewModel.vehicleProfileImported.collectAsState()
     val vehicleProfileWarnings by viewModel.vehicleProfileWarnings.collectAsState()
@@ -260,20 +268,117 @@ fun PresetPickerScreen(viewModel: MainViewModel) {
                 }
             }
             item {
-                ListItem(
-                    headlineContent = { Text("Metric units") },
-                    supportingContent = { Text("km, km/h, °C, kPa, kWh/100 km. Off: mi, mph, °F, psi, mi/kWh.") },
-                    trailingContent = {
-                        Switch(
-                            checked = unitSystem == com.evcompanion.core.units.UnitSystem.METRIC,
-                            onCheckedChange = { metric ->
-                                viewModel.setUnitSystem(
-                                    if (metric) com.evcompanion.core.units.UnitSystem.METRIC else com.evcompanion.core.units.UnitSystem.IMPERIAL,
-                                )
-                            },
+                Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp)) {
+                    ListItem(
+                        headlineContent = { Text("Units") },
+                        supportingContent = {
+                            val summary = when {
+                                unitPrefs.isMetric -> "Metric (km, °C, kPa, kWh/100km)"
+                                unitPrefs.isImperial -> "Imperial (mi, °F, psi, mi/kWh)"
+                                else -> "Custom (${unitPrefs.distance.label}, ${unitPrefs.temperature.label}, ${unitPrefs.pressure.label}, ${unitPrefs.efficiency.label})"
+                            }
+                            Text(summary)
+                        },
+                        trailingContent = {
+                            Switch(
+                                checked = unitPrefs.isMetric,
+                                onCheckedChange = { metric ->
+                                    viewModel.setUnitSystem(
+                                        if (metric) com.evcompanion.core.units.UnitSystem.METRIC else com.evcompanion.core.units.UnitSystem.IMPERIAL,
+                                    )
+                                },
+                            )
+                        },
+                        modifier = Modifier.clickable { unitsExpanded = !unitsExpanded },
+                    )
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            text = if (unitsExpanded) "Hide individual unit selections" else "Customize individual units...",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.clickable { unitsExpanded = !unitsExpanded }.padding(vertical = 4.dp),
                         )
-                    },
-                )
+                    }
+
+                    if (unitsExpanded) {
+                        Card(
+                            modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                            colors = CardDefaults.cardColors(
+                                containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                            ),
+                        ) {
+                            Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                                // Distance
+                                Column {
+                                    Text("Distance & Speed", style = MaterialTheme.typography.labelMedium)
+                                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 4.dp)) {
+                                        com.evcompanion.core.units.DistanceUnit.values().forEach { dist ->
+                                            FilterChip(
+                                                selected = unitPrefs.distance == dist,
+                                                onClick = { viewModel.setDistanceUnit(dist) },
+                                                label = {
+                                                    Text(if (dist == com.evcompanion.core.units.DistanceUnit.MILES) "Miles (mi, mph)" else "Kilometers (km, km/h)")
+                                                },
+                                            )
+                                        }
+                                    }
+                                }
+
+                                // Temperature
+                                Column {
+                                    Text("Temperature", style = MaterialTheme.typography.labelMedium)
+                                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 4.dp)) {
+                                        com.evcompanion.core.units.TemperatureUnit.values().forEach { temp ->
+                                            FilterChip(
+                                                selected = unitPrefs.temperature == temp,
+                                                onClick = { viewModel.setTemperatureUnit(temp) },
+                                                label = {
+                                                    Text(if (temp == com.evcompanion.core.units.TemperatureUnit.FAHRENHEIT) "Fahrenheit (°F)" else "Celsius (°C)")
+                                                },
+                                            )
+                                        }
+                                    }
+                                }
+
+                                // Pressure
+                                Column {
+                                    Text("Tire Pressure", style = MaterialTheme.typography.labelMedium)
+                                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 4.dp)) {
+                                        com.evcompanion.core.units.PressureUnit.values().forEach { press ->
+                                            FilterChip(
+                                                selected = unitPrefs.pressure == press,
+                                                onClick = { viewModel.setPressureUnit(press) },
+                                                label = { Text(press.label) },
+                                            )
+                                        }
+                                    }
+                                }
+
+                                // Efficiency
+                                Column {
+                                    Text("Efficiency Metric", style = MaterialTheme.typography.labelMedium)
+                                    Row(
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                        modifier = Modifier.padding(top = 4.dp).horizontalScroll(rememberScrollState()),
+                                    ) {
+                                        com.evcompanion.core.units.EfficiencyUnit.values().forEach { eff ->
+                                            FilterChip(
+                                                selected = unitPrefs.efficiency == eff,
+                                                onClick = { viewModel.setEfficiencyUnit(eff) },
+                                                label = { Text(eff.label) },
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
             }
             item {
                 Text(

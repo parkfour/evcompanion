@@ -36,6 +36,13 @@ class LineChartDrawingTest {
         assertEquals("301.9 A", LineChartDrawing.formatValue(301.9, "A"))
         assertEquals("28 %", LineChartDrawing.formatValue(27.5, "%"))
         assertEquals("30.0 °C", LineChartDrawing.formatValue(30.0, "C"))
+        assertEquals("86.0 °F", LineChartDrawing.formatValue(86.0, "F"))
+        assertEquals("°C", LineChartDrawing.displayUnit("C"))
+        assertEquals("°F", LineChartDrawing.displayUnit("F"))
+        assertEquals("°C", LineChartDrawing.displayUnit("°C"))
+        assertEquals("°F", LineChartDrawing.displayUnit("°F"))
+        assertEquals("25", LineChartDrawing.formatTick(25.0, 1.0))
+        assertEquals("25.5", LineChartDrawing.formatTick(25.5, 0.5))
         assertEquals("--", LineChartDrawing.formatValue(null, "kW"))
     }
 }

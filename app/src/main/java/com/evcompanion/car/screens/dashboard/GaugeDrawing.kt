@@ -373,6 +373,7 @@ object GaugeDrawing {
         // own min/max instead - for overlaying differently-scaled metrics (SoC %, power kW,
         // current A, temp C) so none of them get flattened by the others' range.
         perSeriesNormalize: Boolean = false,
+        unit: String? = null,
     ) {
         val headingSize = rect.height() * 0.08f
         val headingPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -383,9 +384,9 @@ object GaugeDrawing {
         }
         canvas.drawText(label, rect.exactCenterX(), rect.top + headingSize * 1.3f, headingPaint)
 
-        val graphRect = Rect(rect.left, (rect.top + headingSize * 1.9f).toInt(), rect.right, rect.bottom)
         val allValues = series.flatMap { it.first }
-        if (allValues.size < 2 || graphRect.height() <= 0) return
+        val topOffset = rect.top + headingSize * 1.9f
+        if (allValues.size < 2 || rect.bottom <= topOffset) return
 
         fun rangeOf(values: List<Float>): Pair<Float, Float> {
             if (values.isEmpty()) return 0f to 1f
@@ -393,19 +394,76 @@ object GaugeDrawing {
             val maxV = values.max()
             return minV to ((maxV - minV).takeIf { it > 0.5f } ?: 1f)
         }
-        val sharedRange = rangeOf(allValues)
-        val ranges = series.map { (values, _) -> if (perSeriesNormalize) rangeOf(values) else sharedRange }
 
-        // Subtle reference grid lines if configured
-        theme.graphGridColor?.let { gridColor ->
+        val graphRect: RectF
+        val ranges: List<Pair<Float, Float>>
+
+        if (!perSeriesNormalize) {
+            val minV = allValues.min()
+            val maxV = allValues.max()
+            val ticks = LineChartDrawing.niceTicks(minV.toDouble(), maxV.toDouble(), target = 3)
+            val tickLo = ticks.first().toFloat()
+            val tickHi = ticks.last().toFloat()
+            val tickRange = (tickHi - tickLo).takeIf { it > 0.5f } ?: 1f
+            val tickStep = if (ticks.size > 1) ticks[1] - ticks[0] else 1.0
+
+            val dispUnit = unit?.let { LineChartDrawing.displayUnit(it) }?.takeIf { it.isNotBlank() }
+            val axisTextSize = (rect.height() * 0.055f).coerceIn(10f, 20f)
+            val axisPad = axisTextSize * 0.5f
+            val axisPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                color = theme.textSecondaryColor
+                textSize = axisTextSize
+                textAlign = Paint.Align.RIGHT
+                typeface = theme.labelTypeface
+            }
+            val maxTickWidth = ticks.maxOfOrNull { axisPaint.measureText(LineChartDrawing.formatTick(it, tickStep)) } ?: (axisTextSize * 2.5f)
+            val axisWidth = maxTickWidth + axisPad
+
+            val graphLeft = rect.left + axisWidth + axisPad
+            val graphRight = rect.right - axisPad * 1.5f
+            val graphTop = topOffset + axisTextSize * 0.5f
+            val graphBottom = rect.bottom - axisPad * 1.2f
+            graphRect = RectF(graphLeft, graphTop, graphRight, graphBottom)
+            if (graphRect.width() <= 10f || graphRect.height() <= 10f) return
+
+            // Unit symbol above the axis if present
+            dispUnit?.let {
+                canvas.drawText(it, graphRect.left - axisPad * 0.6f, graphRect.top - axisTextSize * 0.4f, axisPaint)
+            }
+
+            // Grid lines and Y-axis tick values
             val gridPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                color = gridColor
+                color = theme.graphGridColor ?: theme.textSecondaryColor
                 style = Paint.Style.STROKE
                 strokeWidth = 1f
+                alpha = 70
             }
-            val stepY = graphRect.height() / 3f
-            canvas.drawLine(graphRect.left.toFloat(), graphRect.top + stepY, graphRect.right.toFloat(), graphRect.top + stepY, gridPaint)
-            canvas.drawLine(graphRect.left.toFloat(), graphRect.top + stepY * 2, graphRect.right.toFloat(), graphRect.top + stepY * 2, gridPaint)
+            ticks.forEach { tick ->
+                val frac = ((tick.toFloat() - tickLo) / tickRange).coerceIn(0f, 1f)
+                val y = graphRect.bottom - frac * graphRect.height()
+                canvas.drawLine(graphRect.left, y, graphRect.right, y, gridPaint)
+                val tickStr = LineChartDrawing.formatTick(tick, tickStep)
+                canvas.drawText(tickStr, graphRect.left - axisPad * 0.6f, y + axisTextSize * 0.35f, axisPaint)
+            }
+
+            val sharedRange = tickLo to tickRange
+            ranges = series.map { sharedRange }
+        } else {
+            graphRect = RectF(rect.left.toFloat(), topOffset, rect.right.toFloat(), rect.bottom.toFloat())
+            if (graphRect.width() <= 10f || graphRect.height() <= 10f) return
+
+            theme.graphGridColor?.let { gridColor ->
+                val gridPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                    color = gridColor
+                    style = Paint.Style.STROKE
+                    strokeWidth = 1f
+                }
+                val stepY = graphRect.height() / 3f
+                canvas.drawLine(graphRect.left, graphRect.top + stepY, graphRect.right, graphRect.top + stepY, gridPaint)
+                canvas.drawLine(graphRect.left, graphRect.top + stepY * 2, graphRect.right, graphRect.top + stepY * 2, gridPaint)
+            }
+
+            ranges = series.map { (values, _) -> rangeOf(values) }
         }
 
         fun computePoints(values: List<Float>, minV: Float, range: Float): List<PointF> {
@@ -413,7 +471,7 @@ object GaugeDrawing {
             return values.mapIndexed { i, v ->
                 val x = graphRect.left + graphRect.width() * (i.toFloat() / (count - 1).coerceAtLeast(1))
                 val y = (graphRect.bottom - ((v - minV) / range) * graphRect.height())
-                    .coerceIn(graphRect.top.toFloat(), graphRect.bottom.toFloat())
+                    .coerceIn(graphRect.top, graphRect.bottom)
                 PointF(x, y)
             }
         }

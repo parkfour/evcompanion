@@ -5,7 +5,9 @@ Bluetooth ELM327-style adapter) and renders a custom, hand-drawn dashboard on
 the car's own screen through Android Auto - state of charge, trip and instant efficiency,
 pack voltage/current, cell voltages, pack/cabin/tire temperatures, 12V battery, motor RPM and
 pedal, lights, nearby DC chargers with one-tap navigation, and more, laid out from a JSON config
-rather than hardcoded per-screen. Imperial or metric units, chosen in the phone app.
+rather than hardcoded per-screen. Imperial or metric units, chosen in the phone app, with
+separate choices for distance, temperature, tire pressure (psi, bar, kPa) and efficiency
+(mi/kWh, km/kWh, kWh/100km, Wh/mi, Wh/km).
 
 Built and tested against a Hyundai IONIQ 5 (AWD, 77.4 kWh pack). A `generic_ev.csv`
 preset ships alongside the IONIQ 5-specific one, but PID coverage and formulas for

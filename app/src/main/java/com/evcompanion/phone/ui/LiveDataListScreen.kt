@@ -27,7 +27,7 @@ fun LiveDataListScreen(viewModel: MainViewModel) {
     val presets by viewModel.presets.collectAsState()
     val activeId by viewModel.activePresetId.collectAsState()
     val values by viewModel.values.collectAsState()
-    val unitSystem by viewModel.unitSystem.collectAsState()
+    val unitPrefs by viewModel.unitPreferences.collectAsState()
     val activePreset = presets.firstOrNull { it.id == activeId }
 
     DisposableEffect(activePreset?.id) {
@@ -48,7 +48,7 @@ fun LiveDataListScreen(viewModel: MainViewModel) {
                 items(categoryValues) { v ->
                     ListItem(
                         headlineContent = { Text(v.displayName) },
-                        trailingContent = { val shown = v.inUnits(unitSystem); Text("${"%.2f".format(shown.value)} ${shown.unit}") },
+                        trailingContent = { val shown = v.inUnits(unitPrefs); Text("${"%.2f".format(shown.value)} ${shown.unit}") },
                     )
                 }
             }

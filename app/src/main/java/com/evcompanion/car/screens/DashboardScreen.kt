@@ -43,7 +43,7 @@ import com.evcompanion.core.dashboard.DetailViewDef
 import com.evcompanion.core.dashboard.HeroType
 import com.evcompanion.core.dashboard.TileDef
 import com.evcompanion.core.dashboard.findValue
-import com.evcompanion.core.units.UnitSystem
+import com.evcompanion.core.units.UnitPreferences
 import com.evcompanion.core.units.Units
 import com.evcompanion.core.units.Units.inUnits
 import com.evcompanion.core.vehicle.VehicleProfile
@@ -137,7 +137,7 @@ class DashboardScreen(carContext: CarContext, private val container: AppContaine
     private var subscribedSlowNames: Set<String> = emptySet()
     private var latestValues: Map<String, DecodedValue> = emptyMap()
     private var autoScanDtcOnHero = false
-    private var unitSystem = UnitSystem.IMPERIAL
+    private var unitPrefs = UnitPreferences.IMPERIAL
     private var dtcScanState: DtcScanState = DtcScanState.Idle
     private var clearDtcArmedUntilMillis = 0L
     private var socFastChargeThresholdPercent = 30
@@ -442,8 +442,8 @@ class DashboardScreen(carContext: CarContext, private val container: AppContaine
         }
 
         lifecycleScope.launch {
-            container.dashboardLayoutConfig.unitSystem.collect {
-                unitSystem = it
+            container.dashboardLayoutConfig.unitPreferences.collect {
+                unitPrefs = it
                 invalidate()
                 redraw()
             }
@@ -990,7 +990,7 @@ class DashboardScreen(carContext: CarContext, private val container: AppContaine
         val radius = minOf(rect.width(), rect.height()) * 0.4f
         GaugeDrawing.drawBigGauge(
             canvas, rect.exactCenterX(), rect.exactCenterY(), radius, fraction,
-            valueText = value?.inUnits(unitSystem)?.let { "${it.value.toInt()}${if (panel.showUnits) it.unit else ""}" } ?: "--",
+            valueText = value?.inUnits(unitPrefs)?.let { "${it.value.toInt()}${if (panel.showUnits) it.unit else ""}" } ?: "--",
             label = panel.label ?: "",
             ringColor = { frac -> panel.gaugeColorRules?.resolve(value?.value, latestValues) ?: activeTheme.resolveGaugeColor(frac) },
             theme = activeTheme,
@@ -998,7 +998,7 @@ class DashboardScreen(carContext: CarContext, private val container: AppContaine
     }
 
     private fun drawDetailValuePanel(canvas: Canvas, rect: Rect, panel: DetailPanelDef) {
-        val value = detailResolvedValue(panel)?.inUnits(unitSystem)
+        val value = detailResolvedValue(panel)?.inUnits(unitPrefs)
         val unit = if (panel.showUnits) value?.unit ?: "" else ""
         val decimals = if (unit.isBlank() || unit == "%") 0 else 1
         val textSize = (rect.width() * 0.16f).coerceIn(16f, 48f).coerceAtMost(rect.height() * 0.3f)
@@ -1016,9 +1016,9 @@ class DashboardScreen(carContext: CarContext, private val container: AppContaine
             LineChartDrawing.Series(
                 label = s.label ?: s.pidNames.firstOrNull().orEmpty(),
                 color = s.color ?: activeTheme.defaultGraphColor,
-                unit = Units.convert(0.0, detailGraphHistory.unitFor(key, i).orEmpty(), unitSystem).second,
+                unit = Units.convert(0.0, detailGraphHistory.unitFor(key, i).orEmpty(), unitPrefs).second,
                 samples = detailGraphHistory.samplesFor(key, i).map { (t, v) ->
-                    t to Units.convert(v, detailGraphHistory.unitFor(key, i).orEmpty(), unitSystem).first
+                    t to Units.convert(v, detailGraphHistory.unitFor(key, i).orEmpty(), unitPrefs).first
                 },
             )
         }
@@ -1199,7 +1199,7 @@ class DashboardScreen(carContext: CarContext, private val container: AppContaine
         val cellH = right.height() / motors.size
         val textSize = (right.width() * 0.16f).coerceIn(18f, 72f).coerceAtMost(cellH * 0.38f)
         motors.forEachIndexed { i, sub ->
-            val shown = sub.resolve(latestValues)?.inUnits(unitSystem)
+            val shown = sub.resolve(latestValues)?.inUnits(unitPrefs)
             val text = GaugeDrawing.formatValue(shown?.value, if (tile.showUnits) shown?.unit ?: "" else "", decimals(shown))
             GaugeDrawing.drawReadout(
                 canvas, right.exactCenterX(), right.top + cellH * i + cellH / 2f, textSize,
@@ -1211,13 +1211,24 @@ class DashboardScreen(carContext: CarContext, private val container: AppContaine
     /** A time-series line graph instead of the usual grid - see [graphHistory]. */
     private fun drawGraphHero(canvas: Canvas, inner: Rect, tile: TileDef) {
         val seriesData = tile.hero.series.mapIndexed { i, s ->
-            graphHistory.pointsFor(tile.id, i) to (s.color ?: activeTheme.defaultGraphColor)
+            val points = graphHistory.pointsFor(tile.id, i)
+            val rawUnit = graphHistory.unitFor(tile.id, i).orEmpty()
+            val converted = if (rawUnit.isNotEmpty()) {
+                points.map { Units.convert(it.toDouble(), rawUnit, unitPrefs).first.toFloat() }
+            } else {
+                points
+            }
+            converted to (s.color ?: activeTheme.defaultGraphColor)
         }
         if (seriesData.all { it.first.size < 2 }) {
             drawTileContent(canvas, inner, tile, big = true)
             return
         }
-        GaugeDrawing.drawLineGraph(canvas, inner, tile.label, seriesData, theme = activeTheme)
+        val unit = tile.hero.series.indices.firstNotNullOfOrNull { i ->
+            val rawUnit = graphHistory.unitFor(tile.id, i).orEmpty()
+            if (rawUnit.isNotEmpty()) Units.convert(0.0, rawUnit, unitPrefs).second else null
+        }
+        GaugeDrawing.drawLineGraph(canvas, inner, tile.label, seriesData, theme = activeTheme, unit = unit)
     }
 
     private fun recordGraphHistory(values: Map<String, DecodedValue>) {
@@ -1253,7 +1264,7 @@ class DashboardScreen(carContext: CarContext, private val container: AppContaine
             // value centered in the whole tile, same readout style a grid cell would use.
             val rear = tile.values.getOrNull(1)
             val value = rear?.resolve(latestValues)
-            val formatted = value?.inUnits(unitSystem).let { shown -> GaugeDrawing.formatValue(shown?.value, if (tile.showUnits) shown?.unit ?: "" else "", decimals(shown)) }
+            val formatted = value?.inUnits(unitPrefs).let { shown -> GaugeDrawing.formatValue(shown?.value, if (tile.showUnits) shown?.unit ?: "" else "", decimals(shown)) }
             val textSize = (rect.width() * (if (big) 0.12f else 0.20f)).coerceIn(14f, 60f).coerceAtMost(rect.height() * 0.34f)
             GaugeDrawing.drawReadout(
                 canvas, rect.exactCenterX(), rect.exactCenterY().toFloat(), textSize,
@@ -1278,7 +1289,7 @@ class DashboardScreen(carContext: CarContext, private val container: AppContaine
                 )
                 return
             }
-            val text = value?.inUnits(unitSystem).let { shown -> GaugeDrawing.formatValue(shown?.value, if (tile.showUnits) shown?.unit ?: "" else "", decimals(shown)) }
+            val text = value?.inUnits(unitPrefs).let { shown -> GaugeDrawing.formatValue(shown?.value, if (tile.showUnits) shown?.unit ?: "" else "", decimals(shown)) }
             if (big) {
                 GaugeDrawing.drawBigReadout(canvas, rect.exactCenterX(), rect.exactCenterY(), rect.width().toFloat(), tile.label, text, theme = activeTheme)
             } else {
@@ -1301,7 +1312,7 @@ class DashboardScreen(carContext: CarContext, private val container: AppContaine
         val gridArea = Rect(rect.left, (rect.top + headingSize * 2f).toInt(), rect.right, rect.bottom)
         val cells = GaugeDrawing.gridCells(gridArea, tile.values.size)
         val texts = tile.values.map { sub ->
-            sub.resolve(latestValues)?.inUnits(unitSystem).let { shown -> GaugeDrawing.formatValue(shown?.value, if (tile.showUnits) shown?.unit ?: "" else "", decimals(shown)) }
+            sub.resolve(latestValues)?.inUnits(unitPrefs).let { shown -> GaugeDrawing.formatValue(shown?.value, if (tile.showUnits) shown?.unit ?: "" else "", decimals(shown)) }
         }
         // One number size for the whole tile - the smallest any cell needs to fit - so the numbers
         // line up instead of each cell shrinking on its own to make room for its unit.
@@ -1411,7 +1422,7 @@ class DashboardScreen(carContext: CarContext, private val container: AppContaine
             textSize = (h * 0.085f).coerceIn(11f, 20f)
             typeface = activeTheme.labelTypeface
         }
-        val dist = charger.distanceMiles?.let { val (d, u) = Units.convert(it, "mi", unitSystem); String.format(Locale.US, "%.1f %s", d, u) }
+        val dist = charger.distanceMiles?.let { val (d, u) = Units.convert(it, "mi", unitPrefs); String.format(Locale.US, "%.1f %s", d, u) }
         if (dist != null) canvas.drawText(ellipsize(detailPaint, dist, textW), rect.left + pad, y + detailPaint.textSize * 1.4f, detailPaint)
 
         // Bottom row: kW pill | NAV button.
@@ -1593,7 +1604,7 @@ class DashboardScreen(carContext: CarContext, private val container: AppContaine
     }
 
     private fun formatGaugeValue(raw: DecodedValue?, showUnits: Boolean, decimals: Int): String {
-        val value = raw?.inUnits(unitSystem)
+        val value = raw?.inUnits(unitPrefs)
         if (value?.value == null) return "--"
         if (value.unit.equals("REGEN", ignoreCase = true)) return "REGEN"
         val num = if (decimals == 0) "${value.value.toInt()}" else String.format(Locale.US, "%.${decimals}f", value.value)
@@ -1831,7 +1842,7 @@ class DashboardScreen(carContext: CarContext, private val container: AppContaine
             canvas.drawText(nameText, textLeft, nameY, namePaint)
 
             // Details: distance • address/network • stalls
-            val distText = charger.distanceMiles?.let { val (d, u) = Units.convert(it, "mi", unitSystem); String.format(Locale.US, "%.1f %s", d, u) } ?: ""
+            val distText = charger.distanceMiles?.let { val (d, u) = Units.convert(it, "mi", unitPrefs); String.format(Locale.US, "%.1f %s", d, u) } ?: ""
             val rawDetail = listOfNotNull(
                 distText.ifBlank { null },
                 (charger.network ?: charger.address).ifBlank { null },

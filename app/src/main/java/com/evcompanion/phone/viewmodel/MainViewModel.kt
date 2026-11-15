@@ -142,11 +142,27 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun setDebugFeaturesEnabled(enabled: Boolean) =
         com.evcompanion.core.debug.DebugFileLogger.setEnabled(getApplication(), enabled)
 
-    val unitSystem: StateFlow<com.evcompanion.core.units.UnitSystem> = container.dashboardLayoutConfig.unitSystem
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), com.evcompanion.core.units.UnitSystem.IMPERIAL)
+    val unitPreferences: StateFlow<com.evcompanion.core.units.UnitPreferences> = container.dashboardLayoutConfig.unitPreferences
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), com.evcompanion.core.units.UnitPreferences.IMPERIAL)
 
     fun setUnitSystem(system: com.evcompanion.core.units.UnitSystem) = viewModelScope.launch {
         container.dashboardLayoutConfig.setUnitSystem(system)
+    }
+
+    fun setDistanceUnit(unit: com.evcompanion.core.units.DistanceUnit) = viewModelScope.launch {
+        container.dashboardLayoutConfig.setDistanceUnit(unit)
+    }
+
+    fun setTemperatureUnit(unit: com.evcompanion.core.units.TemperatureUnit) = viewModelScope.launch {
+        container.dashboardLayoutConfig.setTemperatureUnit(unit)
+    }
+
+    fun setPressureUnit(unit: com.evcompanion.core.units.PressureUnit) = viewModelScope.launch {
+        container.dashboardLayoutConfig.setPressureUnit(unit)
+    }
+
+    fun setEfficiencyUnit(unit: com.evcompanion.core.units.EfficiencyUnit) = viewModelScope.launch {
+        container.dashboardLayoutConfig.setEfficiencyUnit(unit)
     }
 
     val autoScanDtcOnHero: StateFlow<Boolean> = container.dashboardLayoutConfig.autoScanDtcOnHero

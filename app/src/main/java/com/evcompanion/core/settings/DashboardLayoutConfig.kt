@@ -1,5 +1,10 @@
 package com.evcompanion.core.settings
 
+import com.evcompanion.core.units.DistanceUnit
+import com.evcompanion.core.units.EfficiencyUnit
+import com.evcompanion.core.units.PressureUnit
+import com.evcompanion.core.units.TemperatureUnit
+import com.evcompanion.core.units.UnitPreferences
 import com.evcompanion.core.units.UnitSystem
 import android.content.Context
 import androidx.datastore.preferences.core.booleanPreferencesKey
@@ -22,6 +27,10 @@ private val AUTO_SCAN_DTC_ON_HERO_KEY = booleanPreferencesKey("auto_scan_dtc_on_
 private val SOC_FAST_CHARGE_THRESHOLD_KEY = intPreferencesKey("soc_fast_charge_threshold")
 private val MIN_FAST_CHARGE_POWER_KW_KEY = intPreferencesKey("min_fast_charge_power_kw")
 private val UNIT_SYSTEM_KEY = stringPreferencesKey("unit_system")
+private val DISTANCE_UNIT_KEY = stringPreferencesKey("distance_unit")
+private val TEMPERATURE_UNIT_KEY = stringPreferencesKey("temperature_unit")
+private val PRESSURE_UNIT_KEY = stringPreferencesKey("pressure_unit")
+private val EFFICIENCY_UNIT_KEY = stringPreferencesKey("efficiency_unit")
 
 /**
  * Persisted layout and theme preferences for [com.evcompanion.car.screens.DashboardScreen].
@@ -65,13 +74,63 @@ class DashboardLayoutConfig(private val context: Context) {
         context.dashboardLayoutDataStore.edit { it[MOTOR_DRIVE_TYPE_KEY] = type.name }
     }
 
-    /** Imperial (mi, mph, °F, psi) or metric (km, km/h, °C, kPa) for every displayed value. */
-    val unitSystem: Flow<UnitSystem> = context.dashboardLayoutDataStore.data.map {
-        it[UNIT_SYSTEM_KEY]?.let { name -> runCatching { UnitSystem.valueOf(name) }.getOrNull() } ?: UnitSystem.IMPERIAL
+    /** Granular unit preferences for distance, temperature, pressure, and efficiency. */
+    val unitPreferences: Flow<UnitPreferences> = context.dashboardLayoutDataStore.data.map { prefs ->
+        val globalSystem = prefs[UNIT_SYSTEM_KEY]?.let { name ->
+            runCatching { UnitSystem.valueOf(name) }.getOrNull()
+        } ?: UnitSystem.IMPERIAL
+        val defaults = UnitPreferences.fromSystem(globalSystem)
+
+        val dist = prefs[DISTANCE_UNIT_KEY]?.let { name ->
+            runCatching { DistanceUnit.valueOf(name) }.getOrNull()
+        } ?: defaults.distance
+
+        val temp = prefs[TEMPERATURE_UNIT_KEY]?.let { name ->
+            runCatching { TemperatureUnit.valueOf(name) }.getOrNull()
+        } ?: defaults.temperature
+
+        val press = prefs[PRESSURE_UNIT_KEY]?.let { name ->
+            runCatching { PressureUnit.valueOf(name) }.getOrNull()
+        } ?: defaults.pressure
+
+        val eff = prefs[EFFICIENCY_UNIT_KEY]?.let { name ->
+            runCatching { EfficiencyUnit.valueOf(name) }.getOrNull()
+        } ?: defaults.efficiency
+
+        UnitPreferences(
+            distance = dist,
+            temperature = temp,
+            pressure = press,
+            efficiency = eff,
+        )
     }
 
+    /** Sets the global system and updates all category defaults accordingly. */
     suspend fun setUnitSystem(system: UnitSystem) {
-        context.dashboardLayoutDataStore.edit { it[UNIT_SYSTEM_KEY] = system.name }
+        val defaults = UnitPreferences.fromSystem(system)
+        context.dashboardLayoutDataStore.edit {
+            it[UNIT_SYSTEM_KEY] = system.name
+            it[DISTANCE_UNIT_KEY] = defaults.distance.name
+            it[TEMPERATURE_UNIT_KEY] = defaults.temperature.name
+            it[PRESSURE_UNIT_KEY] = defaults.pressure.name
+            it[EFFICIENCY_UNIT_KEY] = defaults.efficiency.name
+        }
+    }
+
+    suspend fun setDistanceUnit(unit: DistanceUnit) {
+        context.dashboardLayoutDataStore.edit { it[DISTANCE_UNIT_KEY] = unit.name }
+    }
+
+    suspend fun setTemperatureUnit(unit: TemperatureUnit) {
+        context.dashboardLayoutDataStore.edit { it[TEMPERATURE_UNIT_KEY] = unit.name }
+    }
+
+    suspend fun setPressureUnit(unit: PressureUnit) {
+        context.dashboardLayoutDataStore.edit { it[PRESSURE_UNIT_KEY] = unit.name }
+    }
+
+    suspend fun setEfficiencyUnit(unit: EfficiencyUnit) {
+        context.dashboardLayoutDataStore.edit { it[EFFICIENCY_UNIT_KEY] = unit.name }
     }
 
     /** Whether to automatically initiate DTC scan when the Diagnostics tile is promoted to hero. */

@@ -168,7 +168,11 @@ object LineChartDrawing {
         else -> "-${seconds}s"
     }
 
-    fun displayUnit(unit: String): String = if (unit == "C") "°C" else unit
+    fun displayUnit(unit: String): String = when (unit) {
+        "C", "°C" -> "°C"
+        "F", "°F" -> "°F"
+        else -> unit
+    }
 
     fun formatValue(value: Double?, unit: String): String {
         if (value == null) return "--"
