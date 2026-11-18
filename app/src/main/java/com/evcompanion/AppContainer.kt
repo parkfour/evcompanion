@@ -2,6 +2,8 @@ package com.evcompanion
 
 import android.content.Context
 import com.evcompanion.core.bluetooth.BluetoothDeviceRepository
+import com.evcompanion.core.bm6.Bm6DeviceRepository
+import com.evcompanion.core.bm6.Bm6Monitor
 import com.evcompanion.core.bluetooth.LastObdDeviceRepository
 import com.evcompanion.core.dashboard.DashboardConfigRepository
 import com.evcompanion.core.location.VehicleLocationProvider
@@ -40,6 +42,13 @@ class AppContainer(private val context: Context) {
         scope = appScope,
         lastDeviceRepository = lastObdDeviceRepository,
     )
+    val bm6DeviceRepository = Bm6DeviceRepository(context)
+    val bm6Monitor = Bm6Monitor(context, pollingEngine::setExternalValues)
+
+    /** Starts the BM6 link if the user picked one; runs alongside the OBD connection (see ObdPollingService). */
+    fun startBm6IfConfigured() {
+        appScope.launch { bm6DeviceRepository.address.first()?.let(bm6Monitor::start) }
+    }
 
     init {
         // Loaded here (not lazily from a ViewModel, unlike presetRepository) since the car-side

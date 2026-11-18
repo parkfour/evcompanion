@@ -47,10 +47,12 @@ class ObdPollingService : Service() {
                     return START_NOT_STICKY
                 }
                 (application as App).container.pollingEngine.connectAsync(address)
+                (application as App).container.startBm6IfConfigured()
             }
             ACTION_DISCONNECT -> {
                 serviceScope.launch {
                     runCatching { (application as App).container.pollingEngine.disconnect() }
+                    (application as App).container.bm6Monitor.stop()
                     stopForeground(STOP_FOREGROUND_REMOVE)
                     stopSelf()
                 }

@@ -71,6 +71,8 @@ Phone app:
 2. In the phone app's **Connect** tab, pick the adapter: classic Bluetooth adapters
    must be paired in Android's Bluetooth settings first; BLE adapters are found with
    **Scan for BLE devices**. The app reconnects to the last working adapter on launch.
+   Optionally, a BM6 / ANCEL BM200 12V battery monitor found by the same scan can be picked
+   under **12V battery monitor**; its readings then show beside the car's on the 12V tile.
 3. In the **Preset** tab, choose the vehicle preset and Android Auto theme.
 4. Open EV Companion from the Android Auto launcher in the car. Install it from the Play track
    or as the sideload APK; see "Android Auto category" below.
@@ -244,7 +246,7 @@ so older Android Auto hosts can't run it). The trade-offs:
 
 ## Status
 
-Version 0.14.3. Actively developed for one vehicle and a small group of testers on Google Play
+Version 0.14.4. Actively developed for one vehicle and a small group of testers on Google Play
 closed (alpha) testing (`com.parkfour.evcompanion`). Also built as a sideload APK for the
 phone and the Desktop Head Unit. Not yet submitted to Google Play for public distribution.
 

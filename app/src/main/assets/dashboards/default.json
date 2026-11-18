@@ -192,9 +192,9 @@
           "id": "battery_12v_driving",
           "label": "12V BATTERY",
           "values": [
-            { "pidNames": ["Auxillary Battery Voltage"], "sublabel": "VOLTS" },
-            { "pidNames": ["Auxillary Battery SOC"], "sublabel": "SOC" },
-            { "pidNames": ["Auxillary Battery Temperature", "000_Auxillary Battery Temperature"], "sublabel": "TEMP" }
+            { "pidNames": ["Auxillary Battery Voltage"], "comparePidNames": ["BM6 Voltage"], "sublabel": "VOLTS" },
+            { "pidNames": ["Auxillary Battery SOC"], "comparePidNames": ["BM6 SOC"], "sublabel": "SOC" },
+            { "pidNames": ["Auxillary Battery Temperature", "000_Auxillary Battery Temperature"], "comparePidNames": ["BM6 Temperature"], "sublabel": "TEMP" }
           ]
         },
         {

@@ -87,7 +87,9 @@ data class GraphSeriesDef(
  * One value inside a tile or detail panel. [negate] flips the sign for display only (e.g. charge
  * current shown positive on the charging page). [showIfPidName]/[showIfEquals], when set, hide
  * this value unless that other PID currently equals [showIfEquals] - e.g. a heater temperature
- * that's only meaningful while preconditioning is actually active.
+ * that's only meaningful while preconditioning is actually active. [comparePidNames], when set and
+ * resolvable, is a second source for the same quantity shown alongside as "a / b" (e.g. the ECU's
+ * 12V reading vs. a BM6 monitor clipped on the battery terminals).
  */
 data class TileValueDef(
     val pidNames: List<String>,
@@ -95,7 +97,11 @@ data class TileValueDef(
     val negate: Boolean = false,
     val showIfPidName: String? = null,
     val showIfEquals: Double = 1.0,
+    val comparePidNames: List<String> = emptyList(),
 ) {
+    fun resolveCompare(values: Map<String, DecodedValue>): DecodedValue? =
+        if (comparePidNames.isEmpty()) null else findValue(values, comparePidNames)
+
     fun resolve(values: Map<String, DecodedValue>): DecodedValue? {
         if (showIfPidName != null && findValue(values, listOf(showIfPidName))?.value != showIfEquals) return null
         return findValue(values, pidNames)?.let { if (negate) it.copy(value = -it.value) else it }

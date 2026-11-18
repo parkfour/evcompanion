@@ -123,6 +123,7 @@ object DashboardConfigParser {
             negate = obj.optBoolean("negate", false),
             showIfPidName = obj.optString("showIfPidName").takeIf { it.isNotBlank() },
             showIfEquals = obj.optDouble("showIfEquals", 1.0),
+            comparePidNames = obj.optJSONArray("comparePidNames")?.toStringList() ?: emptyList(),
         )
     }
 

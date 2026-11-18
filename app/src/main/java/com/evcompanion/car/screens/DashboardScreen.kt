@@ -1312,7 +1312,14 @@ class DashboardScreen(carContext: CarContext, private val container: AppContaine
         val gridArea = Rect(rect.left, (rect.top + headingSize * 2f).toInt(), rect.right, rect.bottom)
         val cells = GaugeDrawing.gridCells(gridArea, tile.values.size)
         val texts = tile.values.map { sub ->
-            sub.resolve(latestValues)?.inUnits(unitPrefs).let { shown -> GaugeDrawing.formatValue(shown?.value, if (tile.showUnits) shown?.unit ?: "" else "", decimals(shown)) }
+            val shown = sub.resolve(latestValues)?.inUnits(unitPrefs)
+            val compare = sub.resolveCompare(latestValues)?.inUnits(unitPrefs)
+            val unit = if (tile.showUnits) (shown ?: compare)?.unit ?: "" else ""
+            if (compare == null) {
+                GaugeDrawing.formatValue(shown?.value, unit, decimals(shown))
+            } else {
+                "${GaugeDrawing.formatValue(shown?.value, "", decimals(compare))} / ${GaugeDrawing.formatValue(compare.value, unit, decimals(compare))}"
+            }
         }
         // One number size for the whole tile - the smallest any cell needs to fit - so the numbers
         // line up instead of each cell shrinking on its own to make room for its unit.

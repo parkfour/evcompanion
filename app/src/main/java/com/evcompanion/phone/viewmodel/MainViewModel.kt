@@ -5,6 +5,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.evcompanion.App
 import com.evcompanion.core.bluetooth.BondedDevice
+import com.evcompanion.core.bm6.Bm6Monitor
 import com.evcompanion.core.feedback.FeedbackBundle
 import com.evcompanion.core.feedback.FeedbackBundleBuilder
 import com.evcompanion.core.feedback.FeedbackRequest
@@ -55,6 +56,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _isScanning.value = true
         _scannedBleDevices.value = container.bluetoothDeviceRepository.scanForBleDevices()
         _isScanning.value = false
+    }
+
+    val bm6Address: StateFlow<String?> = container.bm6DeviceRepository.address
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
+    val bm6State: StateFlow<Bm6Monitor.State> = container.bm6Monitor.state
+
+    /** Remembers (or with null, forgets) the BM6 and starts/stops its link right away for feedback. */
+    fun selectBm6(address: String?) = viewModelScope.launch {
+        container.bm6DeviceRepository.save(address)
+        if (address == null) container.bm6Monitor.stop() else container.bm6Monitor.start(address)
     }
 
     fun selectPreset(preset: Preset) = viewModelScope.launch {

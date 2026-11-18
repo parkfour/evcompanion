@@ -43,6 +43,9 @@ fun BluetoothPickerScreen(viewModel: MainViewModel) {
     val isScanning by viewModel.isScanning.collectAsState()
     val debugEnabled by viewModel.debugFeaturesEnabled.collectAsState()
     val connectionState by viewModel.connectionState.collectAsState()
+    val bm6Address by viewModel.bm6Address.collectAsState()
+    val bm6State by viewModel.bm6State.collectAsState()
+    val (bm6Devices, obdBleDevices) = scannedDevices.partition { it.name.contains("BM6", ignoreCase = true) }
     val isConnecting = connectionState is ObdConnectionState.Connecting || connectionState is ObdConnectionState.Initializing
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -130,7 +133,38 @@ fun BluetoothPickerScreen(viewModel: MainViewModel) {
                     if (isScanning) CircularProgressIndicator()
                 }
             }
-            items(scannedDevices) { device: BondedDevice -> DeviceRow(device, isConnecting, onConnect = viewModel::connect) }
+            items(obdBleDevices) { device: BondedDevice -> DeviceRow(device, isConnecting, onConnect = viewModel::connect) }
+
+            item {
+                Text(
+                    "12V battery monitor (optional)",
+                    style = androidx.compose.material3.MaterialTheme.typography.titleMedium,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                )
+            }
+            item {
+                Column(modifier = Modifier.padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text(
+                        bm6Address?.let { "BM6 $it - ${bm6State.name.lowercase()}" }
+                            ?: "A BM6 / ANCEL BM200 monitor shows its readings next to the car's on the 12V tile. " +
+                            "Close its own app first (it allows one connection), then scan above and pick it here.",
+                    )
+                    if (bm6Address != null) {
+                        OutlinedButton(onClick = { viewModel.selectBm6(null) }) { Text("Forget monitor") }
+                    }
+                }
+            }
+            items(bm6Devices) { device: BondedDevice ->
+                ListItem(
+                    headlineContent = { Text(device.name) },
+                    supportingContent = { Text(device.address) },
+                    trailingContent = {
+                        Button(onClick = { viewModel.selectBm6(device.address) }, enabled = device.address != bm6Address) {
+                            Text(if (device.address == bm6Address) "In use" else "Use")
+                        }
+                    },
+                )
+            }
 
             if (debugEnabled) {
                 item {

@@ -55,6 +55,7 @@ works with presets that number their rows and ones that don't.
 | `sublabel` | String | Small caption under the number (e.g. `"MIN"`). |
 | `negate` | Boolean | Flip the sign for display only, e.g. to show charging current as positive. |
 | `showIfPidName` / `showIfEquals` | String / Number | Hide this value unless that other PID currently equals `showIfEquals` (default `1`), e.g. a heater temperature shown only while the heater is on. |
+| `comparePidNames` | Array of strings | A second source for the same quantity, shown as `a / b` in grid tiles when it has a value (e.g. `["BM6 Voltage"]` beside the ECU's 12V reading). The BM6 monitor provides `BM6 Voltage`, `BM6 SOC` and `BM6 Temperature`. |
 
 ### Hero (`hero`)
 

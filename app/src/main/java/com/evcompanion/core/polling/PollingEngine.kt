@@ -58,8 +58,24 @@ class PollingEngine(
     private val _connectionState = MutableStateFlow<ObdConnectionState>(ObdConnectionState.Disconnected)
     val connectionState: StateFlow<ObdConnectionState> = _connectionState.asStateFlow()
 
+    // OBD-decoded values and values pushed in from other sources (the BM6 battery monitor) are
+    // kept apart so each can be cleared/replaced without wiping the other, then published merged.
+    private val _obdValues = MutableStateFlow<Map<String, DecodedValue>>(emptyMap())
+    private var externalValues: Map<String, DecodedValue> = emptyMap()
+    private val publishLock = Any()
     private val _values = MutableStateFlow<Map<String, DecodedValue>>(emptyMap())
     val values: StateFlow<Map<String, DecodedValue>> = _values.asStateFlow()
+
+    private fun setObdValues(obd: Map<String, DecodedValue>) = synchronized(publishLock) {
+        _obdValues.value = obd
+        _values.value = obd + externalValues
+    }
+
+    /** Replaces every value from a non-OBD source (e.g. the BM6 monitor); empty map removes them. */
+    fun setExternalValues(external: Map<String, DecodedValue>) = synchronized(publishLock) {
+        externalValues = external
+        _values.value = _obdValues.value + external
+    }
 
     private val _activePresetState = MutableStateFlow<Preset?>(null)
     /** Public read of the active preset - e.g. so a screen can look up which category a
@@ -202,7 +218,7 @@ class PollingEngine(
         }
         try {
             lastDeviceAddress = deviceAddress
-            _values.value = emptyMap()
+            setObdValues(emptyMap())
             repeat(MAX_CONNECT_ATTEMPTS) { attempt ->
                 try {
                     transport?.disconnect()
@@ -219,7 +235,7 @@ class PollingEngine(
                     driver?.initialize()
                     ensurePolling()
 
-                    val gotData = withTimeoutOrNull(DATA_TIMEOUT_MILLIS) { values.first { it.isNotEmpty() } } != null
+                    val gotData = withTimeoutOrNull(DATA_TIMEOUT_MILLIS) { _obdValues.first { it.isNotEmpty() } } != null
                     if (gotData) {
                         // A replay isn't a real adapter - don't auto-"reconnect" to it next launch.
                         if (!deviceAddress.startsWith(com.evcompanion.core.obd.ReplayObdTransport.ADDRESS_PREFIX)) {
@@ -263,7 +279,7 @@ class PollingEngine(
         lock.withLock {
             lastKnownRaw.clear()
             nextPollAt.clear()
-            _values.value = emptyMap()
+            setObdValues(emptyMap())
         }
     }
 
@@ -272,7 +288,7 @@ class PollingEngine(
         _activePresetState.value = preset
         lastKnownRaw.clear()
         nextPollAt.clear()
-        _values.value = emptyMap()
+        setObdValues(emptyMap())
     }
 
     fun subscribe(category: PidCategory) {
@@ -550,7 +566,7 @@ class PollingEngine(
                 merged["DTC Scanned Clean"] = dtcCleanDv
                 merged["004_CALC DTC Scanned Clean"] = dtcCleanDv
 
-                _values.value = merged
+                setObdValues(merged)
                 DebugFileLogger.i(TAG, "poll cycle: ${sortedDueGroups.size} groups in ${timeProvider() - cycleStartMillis}ms")
             } else {
                 consecutiveFailedCycles++
